@@ -1,0 +1,1 @@
+vless://4f0b2269-3bc9-495f-8573-a388e28109b6@efqq.110228.xyz:443?security=tls&type=ws&ech=cloudflare-ech.com%2Bhttps%3A%2F%2Fdns.alidns.com%2Fdns-query&host=efqq.110228.xyz&fp=chrome&sni=efqq.110228.xyz&path=%2Fsub%2Fproxyip%3D64.227.38.240%2C45.150.195.183%2C47.57.181.17%2C82.40.47.114&encryption=none#VoiderProxySub

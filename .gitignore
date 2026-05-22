@@ -1,0 +1,26 @@
+# Node.js dependencies
+node_modules/
+
+# Local proxy core binaries (must not be uploaded to Git)
+core/
+tailwindcss.exe
+
+# Rust/Tauri compile target directory (extremely large!)
+src-tauri/target/
+target/
+
+# IDE and Editor configs
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+
+# Log files
+*.log
+logs/
+
+# Temporary test dumps
+test/online_translated.json
+temp_repos/
