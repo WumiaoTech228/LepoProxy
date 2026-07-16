@@ -108,12 +108,14 @@ pub fn enable_system_proxy(local_port: u16) -> Result<(), String> {
     // 写入注册表，激活代理设置
     let output1 = Command::new("reg")
         .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
+        .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyEnable: {}", e))?;
         
     let proxy_address = format!("127.0.0.1:{}", local_port);
     let output2 = Command::new("reg")
         .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", &proxy_address, "/f"])
+        .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyServer: {}", e))?;
 
@@ -132,6 +134,7 @@ pub fn enable_system_proxy(local_port: u16) -> Result<(), String> {
 pub fn disable_system_proxy() -> Result<(), String> {
     let output = Command::new("reg")
         .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
+        .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyDisable: {}", e))?;
 

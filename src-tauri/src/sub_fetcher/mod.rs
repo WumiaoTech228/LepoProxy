@@ -39,6 +39,8 @@ pub fn parse_user_info(header_val: &str) -> SubUserInfo {
 }
 
 use std::process::Command;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// 调用 Windows 系统自带的 curl.exe 绕过 Cloudflare WAF 的 JA3/JA4 TLS 指纹拦截
 pub fn fetch_via_system_curl(url: &str, ua: &str) -> Result<(String, Option<SubUserInfo>), String> {
@@ -52,13 +54,18 @@ pub fn fetch_via_system_curl(url: &str, ua: &str) -> Result<(String, Option<SubU
         "curl".to_string()
     };
 
-    let output = Command::new(cmd)
-        .args(&[
-            "-isL", // 输出 Header + 追踪 301/302 重定向 + 静默模式
-            "-A", ua,
-            url
-        ])
-        .output()
+    let mut cmd_builder = Command::new(cmd);
+    cmd_builder.args(&[
+        "-isL", // 输出 Header + 追踪 301/302 重定向 + 静默模式
+        "-A", ua,
+        url
+    ]);
+    #[cfg(windows)]
+    {
+        cmd_builder.creation_flags(0x08000000);
+    }
+
+    let output = cmd_builder.output()
         .map_err(|e| format!("Failed to spawn curl: {}", e))?;
 
     if !output.status.success() {
@@ -69,29 +76,54 @@ pub fn fetch_via_system_curl(url: &str, ua: &str) -> Result<(String, Option<SubU
     let stdout_str = String::from_utf8(output.stdout)
         .map_err(|e| format!("curl.exe output is not valid UTF-8: {}", e))?;
 
-    let split_pattern = if stdout_str.contains("\r\n\r\n") {
-        "\r\n\r\n"
-    } else {
-        "\n\n"
-    };
-
-    let parts: Vec<&str> = stdout_str.split(split_pattern).collect();
-    if parts.is_empty() {
-        return Ok((stdout_str, None));
+    // 智能解析 HTTP 响应头与响应体，防范响应体包含空行被错误截断
+    let mut final_header_start = 0;
+    let bytes = stdout_str.as_bytes();
+    let len = bytes.len();
+    
+    // 寻找最后一个以 HTTP/ 起始的响应头块位置 (使用纯字节切片比较以防范 UTF-8 字符边界切片 Panic)
+    let mut i = 0;
+    while i < len {
+        if (i == 0 || bytes[i - 1] == b'\n') && i + 5 <= len && &bytes[i..i+5] == b"HTTP/" {
+            final_header_start = i;
+        }
+        i += 1;
     }
 
-    // 最后一个分片一定是最终的 Response Body 内容
-    let body_part = parts.last().unwrap_or(&"").to_string();
+    // 寻找该响应头块之后的第一个空行分隔符
+    let mut blank_line_idx = None;
+    let mut sep_len = 0;
+    let mut i = final_header_start;
+    while i < len {
+        if i + 4 <= len && &bytes[i..i+4] == b"\r\n\r\n" {
+            blank_line_idx = Some(i);
+            sep_len = 4;
+            break;
+        } else if i + 2 <= len && &bytes[i..i+2] == b"\n\n" {
+            blank_line_idx = Some(i);
+            sep_len = 2;
+            break;
+        }
+        i += 1;
+    }
+
+    let (headers_part, body_part) = match blank_line_idx {
+        Some(idx) => (
+            &stdout_str[..idx],
+            &stdout_str[idx + sep_len..]
+        ),
+        None => ("", stdout_str.as_str())
+    };
+
+    let body_part = body_part.to_string();
     let mut user_info = None;
 
-    // 前面所有的分片都是 Header 响应块（包含重定向响应）
-    for &headers_part in &parts[..parts.len() - 1] {
-        for line in headers_part.lines() {
-            let line_lower = line.to_lowercase();
-            if line_lower.starts_with("subscription-userinfo:") {
-                if let Some((_, val)) = line.split_once(':') {
-                    user_info = Some(parse_user_info(val.trim()));
-                }
+    // 解析包含重定向等的所有响应头部分中的 user-info
+    for line in headers_part.lines() {
+        let line_lower = line.to_lowercase();
+        if line_lower.starts_with("subscription-userinfo:") {
+            if let Some((_, val)) = line.split_once(':') {
+                user_info = Some(parse_user_info(val.trim()));
             }
         }
     }
@@ -217,9 +249,12 @@ pub async fn fetch_and_translate(url: &str) -> Result<String, String> {
         return Err("Decoded subscription content is empty".into());
     }
     
-    // 根据内容特征分流至对应的转译处理器，获取到包含出站节点的 JSON 字符串数组
-    let nodes_json_str = if cleaned_decoded.contains("proxies:") || cleaned_decoded.contains("port:") {
-        crate::sub_translator::translate_clash_yaml(cleaned_decoded)?
+    // 根据内容特征分流至对应的转译处理器，优先使用 Try-Parse-Fallback 模式防范 Clash YAML 误报
+    let nodes_json_str = if cleaned_decoded.contains("proxies:") {
+        match crate::sub_translator::translate_clash_yaml(cleaned_decoded) {
+            Ok(json) => json,
+            Err(_) => crate::sub_translator::translate_nodes(cleaned_decoded)?,
+        }
     } else {
         crate::sub_translator::translate_nodes(cleaned_decoded)?
     };

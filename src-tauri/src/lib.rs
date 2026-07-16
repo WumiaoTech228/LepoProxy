@@ -1,6 +1,8 @@
 use tauri::{Manager, Emitter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 pub mod sub_fetcher;
 pub mod sub_translator;
@@ -47,8 +49,11 @@ fn translate_raw_nodes(content: String) -> Result<String, String> {
         return Err("Decoded node content is empty".into());
     }
     
-    let nodes_json_str = if cleaned.contains("proxies:") || cleaned.contains("port:") {
-        sub_translator::translate_clash_yaml(cleaned)?
+    let nodes_json_str = if cleaned.contains("proxies:") {
+        match sub_translator::translate_clash_yaml(cleaned) {
+            Ok(json) => json,
+            Err(_) => sub_translator::translate_nodes(cleaned)?,
+        }
     } else {
         sub_translator::translate_nodes(cleaned)?
     };
@@ -137,33 +142,42 @@ fn set_autostart_enabled(enabled: bool, is_minimized: bool) -> Result<(), String
             format!("\"{}\"", exe_str)
         };
 
-        let status = std::process::Command::new("reg")
-            .args(&[
-                "add",
-                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                "/v",
-                "LepoProxy",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &launch_arg,
-                "/f"
-            ])
-            .status()
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(&[
+            "add",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "LepoProxy",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &launch_arg,
+            "/f"
+        ]);
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000);
+        }
+
+        let status = cmd.status()
             .map_err(|e| format!("Failed to execute reg.exe: {}", e))?;
         if !status.success() {
             return Err("Failed to add Run registry key".into());
         }
     } else {
-        let _ = std::process::Command::new("reg")
-            .args(&[
-                "delete",
-                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                "/v",
-                "LepoProxy",
-                "/f"
-            ])
-            .status();
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(&[
+            "delete",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            "/v",
+            "LepoProxy",
+            "/f"
+        ]);
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000);
+        }
+        let _ = cmd.status();
     }
     Ok(())
 }

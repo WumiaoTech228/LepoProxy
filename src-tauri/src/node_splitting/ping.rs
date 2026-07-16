@@ -3,6 +3,8 @@ use tokio::net::TcpSocket;
 use tokio::time::timeout;
 use serde_json::Value;
 use std::net::ToSocketAddrs;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// 判断 IP 是否为私有、环回或本地/未指定地址（手动范围校验以保证在任何 Rust 编译器版本下编译稳定）
 fn is_private_or_loopback(ip: std::net::IpAddr) -> bool {
@@ -28,14 +30,23 @@ fn is_private_or_loopback(ip: std::net::IpAddr) -> bool {
 /// 智能解析本机真实的物理网卡 IP（排除 Wintun/Meta 虚拟网卡、回环地址和无网关的虚拟网卡）
 fn get_local_physical_ip_ipconfig() -> Option<std::net::IpAddr> {
     // 运行 cmd /c chcp 65001 && ipconfig 强制以 UTF-8 编码输出，并通常转换为英文标签以获得高兼容性
-    let output = match std::process::Command::new("cmd")
-        .args(["/c", "chcp 65001 && ipconfig"])
-        .output() 
+    let mut cmd1 = std::process::Command::new("cmd");
+    cmd1.args(["/c", "chcp 65001 && ipconfig"]);
+    #[cfg(windows)]
     {
+        cmd1.creation_flags(0x08000000);
+    }
+    
+    let output = match cmd1.output() {
         Ok(out) => out,
         Err(_) => {
             // 降级兜底：如果 cmd.exe 无法启动，尝试直接调用 ipconfig
-            std::process::Command::new("ipconfig").output().ok()?
+            let mut cmd2 = std::process::Command::new("ipconfig");
+            #[cfg(windows)]
+            {
+                cmd2.creation_flags(0x08000000);
+            }
+            cmd2.output().ok()?
         }
     };
 
@@ -202,6 +213,9 @@ pub async fn ping_all_nodes(nodes_json: &str) -> Result<String, String> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // 提取是否含有 WS/gRPC 传输协议以判断是否需要进行 CDN 穿透测速
+        let has_transport = node.get("transport").is_some();
+
         if tag.is_empty() || server.is_empty() || port == 0 {
             continue;
         }
@@ -266,7 +280,8 @@ pub async fn ping_all_nodes(nodes_json: &str) -> Result<String, String> {
             }
 
             // 3. TLS 节点实施真实端到端 HTTPS 穿透检测以识破 CDN 假死节点
-            if has_tls {
+            // 仅对 WS/gRPC 传输协议的节点（常经 CDN）进行 HTTPS 探测，直连 TLS 节点直接返回已完成的 TCP RTT
+            if has_tls && has_transport {
                 let url = format!("https://{}:{}", server_clone2, port);
                 let req_start = Instant::now();
                 
@@ -297,17 +312,16 @@ pub async fn ping_all_nodes(nodes_json: &str) -> Result<String, String> {
                         }
                     }
                     Err(e) => {
-                        // 若为明确的超时或无法连接，判定为不可用
-                        if e.is_timeout() || e.is_connect() {
+                        // 若为明确的超时，判定为不可用；如果是 TLS 握手失败/连接重置等协议不匹配问题，直接采用已成功的 TCP RTT 作为延迟
+                        if e.is_timeout() {
                             (tag_clone, -1)
                         } else {
-                            // 否则可能是代理服务端对原生 HTTP GET 的断开握手，直接采用已成功的 TCP RTT 作为延迟
                             (tag_clone, tcp_rtt)
                         }
                     }
                 }
             } else {
-                // 非 TLS 节点返回物理 TCP RTT
+                // 非 TLS 或非 CDN 节点返回物理 TCP RTT
                 (tag_clone, tcp_rtt)
             }
         });
