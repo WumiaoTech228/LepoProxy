@@ -30,6 +30,8 @@
     "targets": [
       "nsis"
     ],
+    "license": "Apache-2.0",
+    "licenseFile": "LICENSE.txt",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -39,7 +41,15 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "displayLanguageSelector": true,
+        "languages": [
+          "SimpChinese",
+          "TradChinese",
+          "English"
+        ],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "android": {
