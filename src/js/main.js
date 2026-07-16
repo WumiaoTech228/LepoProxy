@@ -116,11 +116,62 @@ mainBtn.addEventListener('click', async () => {
     }
 });
 
+// --- 连接时长计时器管理 ---
+let connectionTimer = null;
+let connectionStartTime = 0;
+
+function startConnectionTimer() {
+    stopConnectionTimer();
+    connectionStartTime = Date.now();
+    const durationEl = document.getElementById('connectionDuration');
+    const detailsEl = document.getElementById('connectionDetails');
+    const nodeDetailEl = document.getElementById('activeNodeDetail');
+    
+    if (detailsEl) {
+        detailsEl.classList.remove('hidden');
+        detailsEl.classList.add('flex');
+    }
+    
+    if (nodeDetailEl) {
+        const activeNodeName = currentNodeIndex === 0 ? "Auto (自动选路)" : (realNodes[currentNodeIndex] ? realNodes[currentNodeIndex].name : "未知节点");
+        nodeDetailEl.textContent = activeNodeName;
+    }
+    
+    connectionTimer = setInterval(() => {
+        const diff = Date.now() - connectionStartTime;
+        const secs = Math.floor(diff / 1000) % 60;
+        const mins = Math.floor(diff / 60000) % 60;
+        const hours = Math.floor(diff / 3600000);
+        
+        const pad = (num) => String(num).padStart(2, '0');
+        if (durationEl) {
+            durationEl.textContent = `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
+        }
+    }, 1000);
+}
+
+function stopConnectionTimer() {
+    if (connectionTimer) {
+        clearInterval(connectionTimer);
+        connectionTimer = null;
+    }
+    const detailsEl = document.getElementById('connectionDetails');
+    const durationEl = document.getElementById('connectionDuration');
+    if (detailsEl) {
+        detailsEl.classList.add('hidden');
+        detailsEl.classList.remove('flex');
+    }
+    if (durationEl) {
+        durationEl.textContent = '00:00:00';
+    }
+}
+
 function updateUIState() {
     if (!btnFill || !loadingWrapper || !iconWrapper) return; // 防御代码，防止渲染报错
 
     if (connectionState === 0) {
         // 未连接：空心状态
+        stopConnectionTimer();
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -137,6 +188,7 @@ function updateUIState() {
 
     } else if (connectionState === 1) {
         // 连接中：展示克制的自旋动画
+        stopConnectionTimer();
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -150,10 +202,11 @@ function updateUIState() {
         pingDot.className = 'w-1.5 h-1.5 rounded-full bg-app-text transition-colors duration-300 animate-pulse flex-shrink-0 opacity-50'; // 极简灰度闪烁
 
     } else if (connectionState === 2) {
-        // 已连接：展示高亮黑白对勾
+        // 已连接：展示高亮对勾，并激活墨水填充
+        startConnectionTimer();
         mainBtn.classList.remove('border-transparent');
         mainBtn.classList.add('border-app-text'); // 边框变为高亮黑/白
-        btnFill.style.transform = 'translateY(101%)';
+        btnFill.style.transform = 'translateY(0)'; // 墨水向上填满
 
         loadingWrapper.style.opacity = '0';
         loadingWrapper.style.transform = 'scale(0.5)';
@@ -161,8 +214,8 @@ function updateUIState() {
         setTimeout(() => {
             iconWrapper.style.opacity = '1';
             iconWrapper.style.transform = 'scale(1)';
-            // 使用 text-app-text 实现纯白/纯黑的极简对勾
-            btnIcon.className = 'ph ph-check text-[42px] text-app-text transition-colors duration-300';
+            // 使用 text-app-base 与填充背景形成高对比度
+            btnIcon.className = 'ph ph-check text-[42px] text-app-base transition-colors duration-300';
         }, 150);
 
         statusTitle.textContent = '已连接';
