@@ -73,8 +73,7 @@ pub fn fetch_via_system_curl(url: &str, ua: &str) -> Result<(String, Option<SubU
         return Err(format!("curl.exe exit error: {}", err_msg));
     }
 
-    let stdout_str = String::from_utf8(output.stdout)
-        .map_err(|e| format!("curl.exe output is not valid UTF-8: {}", e))?;
+    let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
 
     // 智能解析 HTTP 响应头与响应体，防范响应体包含空行被错误截断
     let mut final_header_start = 0;

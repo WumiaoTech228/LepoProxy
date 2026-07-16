@@ -222,11 +222,15 @@ pub fn start_singbox(config_json: &str, app: tauri::AppHandle, tun_enabled: bool
         let app_stdout = app.clone();
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = app_stdout.emit("core-log", l);
+            let mut reader = BufReader::new(stdout);
+            let mut buf = Vec::new();
+            while let Ok(n) = reader.read_until(b'\n', &mut buf) {
+                if n == 0 {
+                    break;
                 }
+                let l = String::from_utf8_lossy(&buf).trim_end().to_string();
+                let _ = app_stdout.emit("core-log", l);
+                buf.clear();
             }
         });
     }
@@ -235,11 +239,15 @@ pub fn start_singbox(config_json: &str, app: tauri::AppHandle, tun_enabled: bool
         let app_stderr = app.clone();
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let _ = app_stderr.emit("core-log", l);
+            let mut reader = BufReader::new(stderr);
+            let mut buf = Vec::new();
+            while let Ok(n) = reader.read_until(b'\n', &mut buf) {
+                if n == 0 {
+                    break;
                 }
+                let l = String::from_utf8_lossy(&buf).trim_end().to_string();
+                let _ = app_stderr.emit("core-log", l);
+                buf.clear();
             }
         });
     }

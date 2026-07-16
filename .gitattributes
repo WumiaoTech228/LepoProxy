@@ -1,0 +1,4 @@
+# Treat binary assets as binary to prevent auto line-ending translation (LF/CRLF) from corrupting them
+*.bmp binary
+*.ico binary
+*.png binary

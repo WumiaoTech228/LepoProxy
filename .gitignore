@@ -24,3 +24,7 @@ logs/
 # Temporary test dumps
 test/online_translated.json
 temp_repos/
+
+# Binaries and installers
+*.exe
+LepoProxy_*_setup.exe

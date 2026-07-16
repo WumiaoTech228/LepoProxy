@@ -1,59 +1,58 @@
-import { initTheme, setTheme, updateThemeUI } from './theme.js';
-import { initDialogs, showConfirm, showToast } from './dialogs.js';
-import { startSpeedMonitor, stopSpeedMonitor } from './speed.js';
-import { initDiagnostics, runIpDiagnostic, runUnlockDiagnostic } from './diagnostics.js';
-import { startConnectionsMonitor, stopConnectionsMonitor } from './connections.js';
-import {
-    loadSubscriptions,
-    saveSubscriptions,
-    ensureSubNodeTypes,
-    subscriptionsData,
-    currentSubIndex,
-    setCurrentSubIndex,
-    systemProxyEnabled,
-    setSystemProxyEnabled,
-    ipv6Enabled,
-    setIpv6Enabled,
-    lanEnabled,
-    setLanEnabled,
-    autoUpdateInterval,
-    setAutoUpdateInterval,
-    customDirectDomains,
-    customProxyDomains,
-    customBlockDomains,
-    dnsLocalServer,
-    dnsRemoteServer,
-    setCustomDirectDomains,
-    setCustomProxyDomains,
-    setCustomBlockDomains,
-    setDnsLocalServer,
-    setDnsRemoteServer,
-    parseDomainsList
-} from './storage.js';
+// --- 主题切换逻辑 ---
+const htmlEl = document.documentElement;
+const themeBtns = document.querySelectorAll('.theme-btn');
 
-// Export connection state getter for diagnostics
-export let connectionState = 0; // 0: 未连, 1: 连接中, 2: 已连
-export function getConnectionState() {
-    return connectionState;
+// 初始主题：优先从 localStorage 读取，否则默认跟随系统的系统深色/浅色偏好
+const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+let currentTheme = localStorage.getItem('lepo_theme') || (systemDarkQuery.matches ? 'dark' : 'light');
+
+function setTheme(theme) {
+    currentTheme = theme;
+    if (theme === 'dark') {
+        htmlEl.classList.add('dark');
+    } else {
+        htmlEl.classList.remove('dark');
+    }
+    localStorage.setItem('lepo_theme', theme);
+    updateThemeUI();
 }
 
-// Helper to generate config JSON including custom DNS and rules
-async function buildSingboxConfigJson(tunEnabled, activeNode, localPort) {
-    return await window.__TAURI__.core.invoke('generate_singbox_config', {
-        nodesJson: rawNodesJson,
-        mode: currentRoutingMode,
-        activeNode: activeNode,
-        localPort: localPort,
-        tunEnabled: tunEnabled,
-        ipv6Enabled: ipv6Enabled,
-        lanEnabled: lanEnabled,
-        customDirectDomains: parseDomainsList(customDirectDomains),
-        customProxyDomains: parseDomainsList(customProxyDomains),
-        customBlockDomains: parseDomainsList(customBlockDomains),
-        dnsLocalServer: dnsLocalServer,
-        dnsRemoteServer: dnsRemoteServer
+// 初始化应用主题
+setTheme(currentTheme);
+
+// 绑定用户手动点击按钮切换
+themeBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        const selectedTheme = e.currentTarget.getAttribute('data-theme');
+        if (selectedTheme === currentTheme) return;
+        setTheme(selectedTheme);
+    });
+});
+
+// 监听系统侧更改：如果操作系统深浅色更改，则立刻跟随系统改变
+systemDarkQuery.addEventListener('change', (e) => {
+    const newTheme = e.matches ? 'dark' : 'light';
+    setTheme(newTheme);
+});
+
+function updateThemeUI() {
+    themeBtns.forEach(b => {
+        if (b.getAttribute('data-theme') === currentTheme) {
+            b.classList.add('bg-app-surface', 'text-app-text', 'shadow-sm', 'border-app-border');
+            b.classList.remove('text-app-muted', 'border-transparent');
+        } else {
+            b.classList.remove('bg-app-surface', 'text-app-text', 'shadow-sm', 'border-app-border');
+            b.classList.add('text-app-muted', 'border-transparent');
+        }
     });
 }
+
+// 初始化执行，确保页面首屏与系统偏好完美契合
+setTheme(currentTheme);
+
+
+// --- 核心连接逻辑 ---
+let connectionState = 0; // 0: 未连, 1: 连接中, 2: 已连
 const mainBtn = document.getElementById('mainBtn');
 const btnFill = document.getElementById('btnFill');
 const loadingWrapper = document.getElementById('loadingWrapper');
@@ -80,7 +79,15 @@ mainBtn.addEventListener('click', async () => {
             const activeNode = currentNodeIndex === 0 ? "Auto" : realNodes[currentNodeIndex].name;
             const portEl = document.getElementById('localPortInput');
             const localPort = portEl ? parseInt(portEl.value) || 2080 : 2080;
-            const configJson = await buildSingboxConfigJson(tunEnabled, activeNode, localPort);
+            const configJson = await window.__TAURI__.core.invoke('generate_singbox_config', {
+                nodesJson: rawNodesJson,
+                mode: currentRoutingMode,
+                activeNode: activeNode,
+                localPort: localPort,
+                tunEnabled: tunEnabled,
+                ipv6Enabled: ipv6Enabled,
+                lanEnabled: lanEnabled
+            });
 
             // 2. 调用后端拉起核心服务并加载系统设置
             await window.__TAURI__.core.invoke('start_proxy', {
@@ -109,104 +116,11 @@ mainBtn.addEventListener('click', async () => {
     }
 });
 
-// --- 连接时长计时器管理 ---
-let connectionTimer = null;
-let connectionStartTime = 0;
-
-function startConnectionTimer() {
-    stopConnectionTimer();
-    connectionStartTime = Date.now();
-    const durationEl = document.getElementById('connectionDuration');
-    const detailsEl = document.getElementById('connectionDetails');
-    const nodeDetailEl = document.getElementById('activeNodeDetail');
-    
-    if (detailsEl) {
-        detailsEl.classList.remove('hidden');
-        detailsEl.classList.add('flex');
-    }
-    
-    if (nodeDetailEl) {
-        const activeNodeName = currentNodeIndex === 0 ? "Auto (自动选路)" : (realNodes[currentNodeIndex] ? realNodes[currentNodeIndex].name : "未知节点");
-        nodeDetailEl.textContent = activeNodeName;
-    }
-    
-    connectionTimer = setInterval(() => {
-        const diff = Date.now() - connectionStartTime;
-        const secs = Math.floor(diff / 1000) % 60;
-        const mins = Math.floor(diff / 60000) % 60;
-        const hours = Math.floor(diff / 3600000);
-        
-        const pad = (num) => String(num).padStart(2, '0');
-        if (durationEl) {
-            durationEl.textContent = `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
-        }
-    }, 1000);
-}
-
-function stopConnectionTimer() {
-    if (connectionTimer) {
-        clearInterval(connectionTimer);
-        connectionTimer = null;
-    }
-    const detailsEl = document.getElementById('connectionDetails');
-    const durationEl = document.getElementById('connectionDuration');
-    if (detailsEl) {
-        detailsEl.classList.add('hidden');
-        detailsEl.classList.remove('flex');
-    }
-    if (durationEl) {
-        durationEl.textContent = '00:00:00';
-    }
-}
-
-let coreLogUnlisten = null;
-let coreCrashedUnlisten = null;
-
-async function setupCoreEventListeners(localPort) {
-    // Unsubscribe any previous listeners to avoid duplicates
-    if (coreLogUnlisten) { try { coreLogUnlisten(); } catch(_) {} coreLogUnlisten = null; }
-    if (coreCrashedUnlisten) { try { coreCrashedUnlisten(); } catch(_) {} coreCrashedUnlisten = null; }
-
-    if (!window.__TAURI__) return;
-
-    try {
-        const { listen } = window.__TAURI__.event;
-
-        // Wire up log panel
-        coreLogUnlisten = await listen('core-log', (event) => {
-            const console = document.getElementById('logDiagnosticConsole');
-            if (!console) return;
-            const line = document.createElement('div');
-            line.className = 'py-0.5 text-app-muted';
-            const text = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
-            line.textContent = text;
-            console.appendChild(line);
-            console.scrollTop = console.scrollHeight;
-        });
-
-        // Wire up crash recovery
-        coreCrashedUnlisten = await listen('core-crashed', () => {
-            if (connectionState !== 2) return;
-            connectionState = 0;
-            updateUIState();
-            showToast('核心进程意外崩溃，连接已断开，系统代理已自动恢复。', 'error');
-        });
-    } catch (e) {
-        console.warn('Failed to set up core event listeners:', e);
-    }
-}
-
 function updateUIState() {
     if (!btnFill || !loadingWrapper || !iconWrapper) return; // 防御代码，防止渲染报错
 
-    const ring1 = document.getElementById('connectedPulseRing');
-    const ring2 = document.getElementById('connectedPulseRing2');
-    const speedWidget = document.getElementById('speedWidget');
-
     if (connectionState === 0) {
         // 未连接：空心状态
-        stopConnectionTimer();
-        stopSpeedMonitor();
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -221,14 +135,8 @@ function updateUIState() {
         statusTitle.className = 'text-[28px] font-semibold text-app-text tracking-tight transition-colors duration-300';
         pingDot.className = 'w-1.5 h-1.5 rounded-full bg-app-muted transition-colors duration-300 flex-shrink-0';
 
-        // Hide pulse rings
-        if (ring1) { ring1.classList.remove('pulse-ring-active'); ring1.style.opacity = '0'; }
-        if (ring2) { ring2.classList.remove('pulse-ring-active-slow'); ring2.style.opacity = '0'; }
-        if (speedWidget) { speedWidget.classList.add('hidden'); speedWidget.classList.remove('flex'); }
-
     } else if (connectionState === 1) {
         // 连接中：展示克制的自旋动画
-        stopConnectionTimer();
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -241,16 +149,11 @@ function updateUIState() {
         statusTitle.textContent = '寻找最佳节点...';
         pingDot.className = 'w-1.5 h-1.5 rounded-full bg-app-text transition-colors duration-300 animate-pulse flex-shrink-0 opacity-50'; // 极简灰度闪烁
 
-        if (ring1) { ring1.classList.remove('pulse-ring-active'); ring1.style.opacity = '0'; }
-        if (ring2) { ring2.classList.remove('pulse-ring-active-slow'); ring2.style.opacity = '0'; }
-        if (speedWidget) { speedWidget.classList.add('hidden'); speedWidget.classList.remove('flex'); }
-
     } else if (connectionState === 2) {
-        // 已连接：展示高亮对勾，并激活墨水填充
-        startConnectionTimer();
+        // 已连接：展示高亮黑白对勾
         mainBtn.classList.remove('border-transparent');
         mainBtn.classList.add('border-app-text'); // 边框变为高亮黑/白
-        btnFill.style.transform = 'translateY(0)'; // 墨水向上填满
+        btnFill.style.transform = 'translateY(101%)';
 
         loadingWrapper.style.opacity = '0';
         loadingWrapper.style.transform = 'scale(0.5)';
@@ -258,38 +161,176 @@ function updateUIState() {
         setTimeout(() => {
             iconWrapper.style.opacity = '1';
             iconWrapper.style.transform = 'scale(1)';
-            // 使用 text-app-base 与填充背景形成高对比度
-            btnIcon.className = 'ph ph-check text-[42px] text-app-base transition-colors duration-300';
+            // 使用 text-app-text 实现纯白/纯黑的极简对勾
+            btnIcon.className = 'ph ph-check text-[42px] text-app-text transition-colors duration-300';
         }, 150);
 
         statusTitle.textContent = '已连接';
         statusTitle.className = 'text-[28px] font-semibold text-app-text tracking-tight transition-colors duration-300';
         pingDot.className = 'w-1.5 h-1.5 rounded-full bg-app-text transition-colors duration-300 flex-shrink-0 shadow-[0_0_8px_currentColor] opacity-100';
-
-        // Activate pulse rings
-        if (ring1) { ring1.classList.add('pulse-ring-active'); ring1.style.opacity = '1'; }
-        if (ring2) { ring2.classList.add('pulse-ring-active-slow'); ring2.style.opacity = '1'; }
-
-        // Show speed widget
-        if (speedWidget) { speedWidget.classList.remove('hidden'); speedWidget.classList.add('flex'); }
-
-        // Start speed monitor and Tauri event listeners
-        const portEl = document.getElementById('localPortInput');
-        const localPort = portEl ? parseInt(portEl.value) || 2080 : 2080;
-        startSpeedMonitor(localPort);
-        setupCoreEventListeners(localPort);
     }
 }
 
 // --- 节点数据与切换逻辑 ---
+let subscriptionsData = [];
+let currentSubIndex = parseInt(localStorage.getItem('lepo_current_sub_index')) || 0;
+
+function ensureSubNodeTypes(sub) {
+    if (!sub || !sub.nodes) return;
+    let outbounds = [];
+    try {
+        outbounds = JSON.parse(sub.rawJson || '[]');
+    } catch (e) {
+        console.error('ensureSubNodeTypes JSON.parse error:', e);
+    }
+    
+    const tagToType = {};
+    if (Array.isArray(outbounds)) {
+        outbounds.forEach(out => {
+            if (out.tag && out.type) {
+                tagToType[out.tag] = out.type;
+            }
+        });
+    }
+
+    sub.nodes.forEach((node, idx) => {
+        if (idx === 0) {
+            node.type = 'auto';
+            return;
+        }
+        if (!node.type) {
+            node.type = tagToType[node.name] || 'unknown';
+        }
+    });
+}
+
+function loadSubscriptions() {
+    let saved = localStorage.getItem('lepo_subscriptions');
+    if (saved) {
+        try {
+            subscriptionsData = JSON.parse(saved);
+            
+            // 彻底滤除/清理旧 ID 'built-in' 项
+            subscriptionsData = subscriptionsData.filter(s => s.id !== 'built-in');
+            
+            // 确保双路内置在线订阅源 'built-in-1' 与 'built-in-2' 始终存在
+            let hasBuiltIn1 = subscriptionsData.some(s => s.id === 'built-in-1');
+            let hasBuiltIn2 = subscriptionsData.some(s => s.id === 'built-in-2');
+            
+            if (!hasBuiltIn1) {
+                subscriptionsData.unshift({
+                    id: 'built-in-1',
+                    name: '免费节点1',
+                    url: 'https://github.com/Au1rxx/free-vpn-subscriptions/raw/main/output/clash.yaml',
+                    nodes: [
+                        { name: 'Default - Auto', ping: '---', color: 'bg-app-text', pinned: false, type: 'auto' }
+                    ],
+                    rawJson: '[]',
+                    traffic: null,
+                    interval: 0,
+                    lastUpdate: Date.now()
+                });
+            }
+            
+            if (!hasBuiltIn2) {
+                subscriptionsData.push({
+                    id: 'built-in-2',
+                    name: '免费节点2',
+                    url: 'https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/all_extracted_configs.txt',
+                    nodes: [
+                        { name: 'Default - Auto', ping: '---', color: 'bg-app-text', pinned: false, type: 'auto' }
+                    ],
+                    rawJson: '[]',
+                    traffic: null,
+                    interval: 0,
+                    lastUpdate: Date.now()
+                });
+            }
+            
+            // 强顺序排列（内置节点 1 与 2 置顶于索引 0 和 1，自定义订阅依次向后）
+            const b1 = subscriptionsData.find(s => s.id === 'built-in-1');
+            const b2 = subscriptionsData.find(s => s.id === 'built-in-2');
+            const others = subscriptionsData.filter(s => s.id !== 'built-in-1' && s.id !== 'built-in-2');
+            subscriptionsData = [b1, b2, ...others];
+            
+            subscriptionsData.forEach(ensureSubNodeTypes);
+            saveSubscriptions();
+            return;
+        } catch (e) {
+            console.error('Failed to parse lepo_subscriptions:', e);
+        }
+    }
+    
+    // 降级与全新初始化逻辑
+    const legacyUrl = localStorage.getItem('subscriptionUrl');
+    const legacyNodes = localStorage.getItem('subscriptionNodes');
+    const legacyRaw = localStorage.getItem('subscriptionRawJson');
+    const legacyTraffic = localStorage.getItem('subscriptionTraffic');
+    const legacyInterval = localStorage.getItem('autoUpdateInterval');
+    const legacyLastUpdate = localStorage.getItem('lastUpdateTimestamp');
+
+    subscriptionsData = [
+        {
+            id: 'built-in-1',
+            name: '免费节点1',
+            url: 'https://github.com/Au1rxx/free-vpn-subscriptions/raw/main/output/clash.yaml',
+            nodes: [
+                { name: 'Default - Auto', ping: '---', color: 'bg-app-text', pinned: false, type: 'auto' }
+            ],
+            rawJson: '[]',
+            traffic: null,
+            interval: 0,
+            lastUpdate: Date.now()
+        },
+        {
+            id: 'built-in-2',
+            name: '免费节点2',
+            url: 'https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/all_extracted_configs.txt',
+            nodes: [
+                { name: 'Default - Auto', ping: '---', color: 'bg-app-text', pinned: false, type: 'auto' }
+            ],
+            rawJson: '[]',
+            traffic: null,
+            interval: 0,
+            lastUpdate: Date.now()
+        },
+        {
+            id: 'custom-sub',
+            name: '自定义订阅',
+            url: legacyUrl || '',
+            nodes: legacyNodes ? JSON.parse(legacyNodes) : [
+                { name: 'Default - Auto', ping: '---', color: 'bg-app-text', pinned: false, type: 'auto' }
+            ],
+            rawJson: legacyRaw || '[]',
+            traffic: legacyTraffic ? JSON.parse(legacyTraffic) : null,
+            interval: parseInt(legacyInterval) || 0,
+            lastUpdate: parseInt(legacyLastUpdate) || Date.now()
+        }
+    ];
+    subscriptionsData.forEach(ensureSubNodeTypes);
+    saveSubscriptions();
+}
+
+function saveSubscriptions() {
+    localStorage.setItem('lepo_subscriptions', JSON.stringify(subscriptionsData));
+}
+
+// Load subscriptions immediately
+loadSubscriptions();
 if (currentSubIndex >= subscriptionsData.length) {
-    setCurrentSubIndex(0);
+    currentSubIndex = 0;
 }
 
 let realNodes = subscriptionsData[currentSubIndex] ? subscriptionsData[currentSubIndex].nodes : [];
 let rawNodesJson = subscriptionsData[currentSubIndex] ? subscriptionsData[currentSubIndex].rawJson : '[]';
 let currentNodeIndex = 0;
 let isPingTesting = false;
+
+// 订阅状态与系统代理状态
+let systemProxyEnabled = localStorage.getItem('systemProxyEnabled') !== 'false'; // 默认开启
+let ipv6Enabled = localStorage.getItem('ipv6Enabled') === 'true'; // 默认关闭
+let lanEnabled = localStorage.getItem('lanEnabled') === 'true'; // 默认关闭
+let autoUpdateInterval = parseInt(localStorage.getItem('autoUpdateInterval')) || 0; // 默认 0，代表不自动更新
 
 let sortState = 'default'; // 'default', 'latency', 'alphabet'
 let searchQuery = '';
@@ -382,7 +423,7 @@ async function renderNodeList() {
                     if (ms < 100) {
                         pillColorClasses = 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 font-semibold';
                     } else if (ms < 300) {
-                        pillColorClasses = 'bg-amber-500/10 text-amber-500 border-amber-500/20 font-semibold';
+                        pillColorClasses = 'bg-sky-500/10 text-sky-500 border-sky-500/20 font-semibold';
                     } else {
                         pillColorClasses = 'bg-rose-500/10 text-rose-500 border-rose-500/20';
                     }
@@ -391,13 +432,13 @@ async function renderNodeList() {
         }
 
         const pinStarHtml = (isPinned && !isAuto) ? `
-            <i class="ph ph-star-fill text-amber-500 text-[10px] flex-shrink-0 ml-1" title="已置顶"></i>
+            <i class="ph ph-star-fill text-sky-500 text-[10px] flex-shrink-0 ml-1" title="已置顶"></i>
         ` : '';
 
         const actionsHtml = isAuto ? '' : `
             <div class="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 hidden group-hover:flex z-10 rounded-full p-0.5 node-actions-capsule backdrop-blur-sm transition-all duration-300">
-                <button class="pin-node-btn w-7 h-7 flex items-center justify-center rounded-full text-app-muted hover:text-amber-500 hover:bg-amber-500/10 transition-all btn-press" title="${isPinned ? '取消置顶' : '置顶节点'}" data-index="${originalIndex}">
-                    <i class="ph ${isPinned ? 'ph-star-fill text-amber-500' : 'ph-star'}"></i>
+                <button class="pin-node-btn w-7 h-7 flex items-center justify-center rounded-full text-app-muted hover:text-sky-500 hover:bg-sky-500/10 transition-all btn-press" title="${isPinned ? '取消置顶' : '置顶节点'}" data-index="${originalIndex}">
+                    <i class="ph ${isPinned ? 'ph-star-fill text-sky-500' : 'ph-star'}"></i>
                 </button>
                 <button class="share-node-btn w-7 h-7 flex items-center justify-center rounded-full text-app-muted hover:text-app-text hover:bg-app-hover transition-all btn-press" title="复制分享链接" data-index="${originalIndex}">
                     <i class="ph ph-copy"></i>
@@ -436,7 +477,7 @@ async function renderNodeList() {
             if (e.target.closest('button')) return;
             currentNodeIndex = originalIndex;
             updateNodeText('next');
-            switchTab('home');
+            closeNodeList();
             renderNodeList();
         });
 
@@ -565,56 +606,33 @@ document.addEventListener('mouseup', (e) => {
     }
 });
 
-// --- 底部 Tab 导航切换与页面初始化 ---
-export function switchTab(tabName) {
-    const tabBtns = document.querySelectorAll('.nav-tab-btn');
-    const tabViews = document.querySelectorAll('.tab-view');
-    
-    tabBtns.forEach(btn => {
-        if (btn.getAttribute('data-tab') === tabName) {
-            btn.classList.add('text-app-primary');
-            btn.classList.remove('text-app-muted', 'hover:text-app-text');
-        } else {
-            btn.classList.remove('text-app-primary');
-            btn.classList.add('text-app-muted', 'hover:text-app-text');
-        }
-    });
+// --- 节点列表模态框呼出 ---
+const nodeListOverlay = document.getElementById('nodeListOverlay');
+const nodeListCard = document.getElementById('nodeListCard');
 
-    tabViews.forEach(view => {
-        const id = 'tab' + tabName.charAt(0).toUpperCase() + tabName.slice(1);
-        if (view.id === id) {
-            view.classList.remove('hidden');
-            view.classList.add('flex');
-        } else {
-            view.classList.add('hidden');
-            view.classList.remove('flex');
-        }
-    });
-
-    // 优化：只有切换到工具页时才启动连接刷新轮询，节省后台 CPU
-    if (tabName === 'tools') {
-        startConnectionsMonitor();
-    } else {
-        stopConnectionsMonitor();
-    }
+function openNodeList() {
+    if (typeof closeSettings === 'function') closeSettings(); // 避免层叠 z-index 遮挡，先关掉设置模态框
+    if (typeof closeSubs === 'function') closeSubs(); // 避免层叠，关掉订阅管理模态框
+    renderNodeList(); // 每次打开时刷新状态
+    nodeListOverlay.classList.remove('opacity-0', 'pointer-events-none');
+    nodeListCard.classList.remove('scale-95', 'opacity-0');
+    nodeListCard.classList.add('scale-100', 'opacity-100');
+}
+function closeNodeList() {
+    nodeListCard.classList.remove('scale-100', 'opacity-100');
+    nodeListCard.classList.add('scale-95', 'opacity-0');
+    nodeListOverlay.classList.add('opacity-0', 'pointer-events-none');
 }
 
-function initTabNavigation() {
-    const tabBtns = document.querySelectorAll('.nav-tab-btn');
-    tabBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const tabName = btn.getAttribute('data-tab');
-            switchTab(tabName);
-        });
-    });
-}
-
-// 快速双击节点切换区切入节点面板
-nodeSwiperContainer.addEventListener('click', (e) => {
+// 双击监听
+nodeSwiperContainer.addEventListener('dblclick', (e) => {
+    // 防止点击左右按钮时触发
     if (e.target.closest('button')) return;
-    switchTab('nodes');
+    openNodeList();
 });
+document.getElementById('closeNodeListBtn').addEventListener('click', closeNodeList);
+nodeListOverlay.addEventListener('click', (e) => { if (e.target === nodeListOverlay) closeNodeList(); });
+
 
 // --- 路由模式滑块 (Phase 3.2) ---
 let currentRoutingMode = 'rule'; // rule, global, direct
@@ -641,99 +659,51 @@ tabs.forEach(tab => {
     });
 });
 
-// --- 新增：自定义规则与 DNS 表单绑定 ---
-function initCustomRulesAndDnsForm() {
-    // DNS 输入框初始化
-    const dnsLocalInput = document.getElementById('dnsLocalInput');
-    const dnsRemoteInput = document.getElementById('dnsRemoteInput');
-    const btnSaveDns = document.getElementById('btnSaveDns');
 
-    if (dnsLocalInput) dnsLocalInput.value = dnsLocalServer;
-    if (dnsRemoteInput) dnsRemoteInput.value = dnsRemoteServer;
+// --- 设置页面浮层 ---
+const settingsOverlay = document.getElementById('settingsOverlay');
+const settingsCard = document.getElementById('settingsCard');
 
-    if (btnSaveDns) {
-        btnSaveDns.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            setDnsLocalServer(dnsLocalInput.value.trim());
-            setDnsRemoteServer(dnsRemoteInput.value.trim());
-            showToast('DNS 配置保存成功！正在重载代理服务...', 'success');
-            await updateSingboxConfig();
-            await hotReloadProxyIfConnected();
-        });
-    }
-
-    // 分流文本域初始化
-    const customDirectInput = document.getElementById('customDirectInput');
-    const customProxyInput = document.getElementById('customProxyInput');
-    const customBlockInput = document.getElementById('customBlockInput');
-    const btnSaveCustomRules = document.getElementById('btnSaveCustomRules');
-
-    if (customDirectInput) customDirectInput.value = customDirectDomains;
-    if (customProxyInput) customProxyInput.value = customProxyDomains;
-    if (customBlockInput) customBlockInput.value = customBlockDomains;
-
-    if (btnSaveCustomRules) {
-        btnSaveCustomRules.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            setCustomDirectDomains(customDirectInput.value.trim());
-            setCustomProxyDomains(customProxyInput.value.trim());
-            setCustomBlockDomains(customBlockInput.value.trim());
-            showToast('分流规则保存成功！正在重载代理服务...', 'success');
-            await updateSingboxConfig();
-            await hotReloadProxyIfConnected();
-        });
-    }
+function openSettings() {
+    if (typeof closeSubs === 'function') closeSubs(); // 避免层叠，关掉订阅管理模态框
+    if (typeof closeNodeList === 'function') closeNodeList(); // 避免层叠，关掉节点选择模态框
+    settingsOverlay.classList.remove('opacity-0', 'pointer-events-none');
+    settingsCard.classList.remove('scale-95', 'opacity-0');
+    settingsCard.classList.add('scale-100', 'opacity-100');
+}
+function closeSettings() {
+    settingsCard.classList.remove('scale-100', 'opacity-100');
+    settingsCard.classList.add('scale-95', 'opacity-0');
+    settingsOverlay.classList.add('opacity-0', 'pointer-events-none');
 }
 
-// --- 新增：全局键盘快捷键功能 ---
-function initKeyboardShortcuts() {
-    document.addEventListener('keydown', (e) => {
-        const activeEl = document.activeElement;
-        const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable;
-        
-        if (isInput) {
-            if (e.key === 'Escape') {
-                activeEl.blur();
-            }
-            return;
-        }
+document.getElementById('settingsBtn').addEventListener('click', openSettings);
+document.getElementById('closeSettingsBtn').addEventListener('click', closeSettings);
+settingsOverlay.addEventListener('click', (e) => { if (e.target === settingsOverlay) closeSettings(); });
 
-        if (e.key === ' ') {
-            e.preventDefault();
-            const mainBtn = document.getElementById('mainBtn');
-            if (mainBtn) mainBtn.click();
-        } else if (e.key === '1') {
-            switchTab('home');
-        } else if (e.key === '2') {
-            switchTab('nodes');
-        } else if (e.key === '3') {
-            switchTab('profiles');
-        } else if (e.key === '4') {
-            switchTab('tools');
-        } else if (e.key === 'Escape') {
-            // 按 Esc 键快速隐藏所有浮动诊断抽屉
-            const closeIp = document.getElementById('closeIpDiagnosticBtn');
-            const closeUnlock = document.getElementById('closeUnlockDiagnosticBtn');
-            const closeLogs = document.getElementById('closeLogsDiagnosticBtn');
-            const closeNodeEdit = document.getElementById('closeNodeEditBtn');
 
-            const isIpOpen = !document.getElementById('ipDiagnosticOverlay').classList.contains('opacity-0');
-            const isUnlockOpen = !document.getElementById('unlockDiagnosticOverlay').classList.contains('opacity-0');
-            const isLogsOpen = !document.getElementById('logsDiagnosticOverlay').classList.contains('opacity-0');
-            const isNodeEditOpen = !document.getElementById('nodeEditOverlay').classList.contains('opacity-0');
+// --- 订阅源管理独立面板 ---
+const subsOverlay = document.getElementById('subsOverlay');
+const subsCard = document.getElementById('subsCard');
 
-            if (closeIp && isIpOpen) {
-                closeIp.click();
-            } else if (closeUnlock && isUnlockOpen) {
-                closeUnlock.click();
-            } else if (closeLogs && isLogsOpen) {
-                closeLogs.click();
-            } else if (closeNodeEdit && isNodeEditOpen) {
-                closeNodeEdit.click();
-            }
-        }
-    });
+function openSubs() {
+    if (typeof closeSettings === 'function') closeSettings(); // 避免层叠，先关掉设置模态框
+    if (typeof closeNodeList === 'function') closeNodeList(); // 避免层叠，先关掉节点列表模态框
+    renderSubscriptionsList();
+    subsOverlay.classList.remove('opacity-0', 'pointer-events-none');
+    subsCard.classList.remove('scale-95', 'opacity-0');
+    subsCard.classList.add('scale-100', 'opacity-100');
 }
+function closeSubs() {
+    subsCard.classList.remove('scale-100', 'opacity-100');
+    subsCard.classList.add('scale-95', 'opacity-0');
+    subsOverlay.classList.add('opacity-0', 'pointer-events-none');
+    hideSubscriptionForm();
+}
+
+document.getElementById('subsBtn').addEventListener('click', openSubs);
+document.getElementById('closeSubsBtn').addEventListener('click', closeSubs);
+subsOverlay.addEventListener('click', (e) => { if (e.target === subsOverlay) closeSubs(); });
 
 
 
@@ -813,7 +783,8 @@ const systemProxyToggle = document.getElementById('systemProxyToggle');
 if (systemProxyToggle) {
     systemProxyToggle.checked = systemProxyEnabled;
     systemProxyToggle.addEventListener('change', async (e) => {
-        setSystemProxyEnabled(e.target.checked);
+        systemProxyEnabled = e.target.checked;
+        localStorage.setItem('systemProxyEnabled', systemProxyEnabled);
         
         // 同步通知托盘
         if (window.__TAURI__ && window.__TAURI__.core) {
@@ -844,7 +815,8 @@ const ipv6Toggle = document.getElementById('ipv6Toggle');
 if (ipv6Toggle) {
     ipv6Toggle.checked = ipv6Enabled;
     ipv6Toggle.addEventListener('change', async (e) => {
-        setIpv6Enabled(e.target.checked);
+        ipv6Enabled = e.target.checked;
+        localStorage.setItem('ipv6Enabled', ipv6Enabled);
         await updateSingboxConfig();
         await hotReloadProxyIfConnected();
     });
@@ -854,7 +826,8 @@ const lanToggle = document.getElementById('lanToggle');
 if (lanToggle) {
     lanToggle.checked = lanEnabled;
     lanToggle.addEventListener('change', async (e) => {
-        setLanEnabled(e.target.checked);
+        lanEnabled = e.target.checked;
+        localStorage.setItem('lanEnabled', lanEnabled);
         await updateSingboxConfig();
         await hotReloadProxyIfConnected();
     });
@@ -977,7 +950,8 @@ function selectSubscription(index) {
         return;
     }
     
-    setCurrentSubIndex(index);
+    currentSubIndex = index;
+    localStorage.setItem('lepo_current_sub_index', currentSubIndex);
     
     const sub = subscriptionsData[currentSubIndex];
     realNodes = sub ? sub.nodes : [];
@@ -1044,8 +1018,9 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     
     // 1. 系统代理复选框切换
     listen('tray-system-proxy-toggle', async (event) => {
-        setSystemProxyEnabled(event.payload);
+        systemProxyEnabled = event.payload;
         console.log('Tray system proxy state toggled:', systemProxyEnabled);
+        localStorage.setItem('systemProxyEnabled', systemProxyEnabled);
         const systemProxyToggle = document.getElementById('systemProxyToggle');
         if (systemProxyToggle) {
             systemProxyToggle.checked = systemProxyEnabled;
@@ -1181,7 +1156,15 @@ async function updateSingboxConfig() {
             const activeNode = currentNodeIndex === 0 ? "Auto" : realNodes[currentNodeIndex].name;
             const portEl = document.getElementById('localPortInput');
             const localPort = portEl ? parseInt(portEl.value) || 2080 : 2080;
-            const configJson = await buildSingboxConfigJson(tunEnabled, activeNode, localPort);
+            const configJson = await window.__TAURI__.core.invoke('generate_singbox_config', {
+                nodesJson: rawNodesJson,
+                mode: currentRoutingMode,
+                activeNode: activeNode,
+                localPort: localPort,
+                tunEnabled: tunEnabled,
+                ipv6Enabled: ipv6Enabled,
+                lanEnabled: lanEnabled
+            });
             console.log("Successfully generated Sing-Box config.json of length:", configJson.length);
         } catch (error) {
             console.error("Failed to generate Sing-Box config:", error);
@@ -1198,7 +1181,15 @@ async function hotReloadProxyIfConnected() {
             const portEl = document.getElementById('localPortInput');
             const localPort = portEl ? parseInt(portEl.value) || 2080 : 2080;
 
-            const configJson = await buildSingboxConfigJson(tunEnabled, activeNode, localPort);
+            const configJson = await window.__TAURI__.core.invoke('generate_singbox_config', {
+                nodesJson: rawNodesJson,
+                mode: currentRoutingMode,
+                activeNode: activeNode,
+                localPort: localPort,
+                tunEnabled: tunEnabled,
+                ipv6Enabled: ipv6Enabled,
+                lanEnabled: lanEnabled
+            });
 
             await window.__TAURI__.core.invoke('start_proxy', {
                 configJson: configJson,
@@ -1289,7 +1280,7 @@ async function triggerPingTest() {
         isPingTesting = false;
         if (pingNodesBtn) {
             pingNodesBtn.disabled = false;
-            if (pingBtnIcon) pingBtnIcon.className = 'ph ph-lightning text-amber-500';
+            if (pingBtnIcon) pingBtnIcon.className = 'ph ph-lightning text-sky-500';
             if (pingBtnText) pingBtnText.textContent = '测试延迟';
         }
     }
@@ -1413,7 +1404,7 @@ function renderSubscriptionsList() {
                 <div class="flex-1 min-w-0 pr-2">
                     <div class="flex items-center gap-1.5">
                         <span class="text-xs font-semibold text-app-text truncate">${sub.name}</span>
-                        ${isBuiltIn ? '<span class="text-[8px] bg-amber-500/10 text-amber-500 border border-amber-500/20 px-1.5 py-0.5 rounded scale-90 origin-left font-bold">内置</span>' : (sub.url ? '' : '<span class="text-[8px] bg-app-border px-1.5 py-0.5 rounded text-app-muted scale-90 origin-left">本地</span>')}
+                        ${isBuiltIn ? '<span class="text-[8px] bg-sky-500/10 text-sky-500 border border-sky-500/20 px-1.5 py-0.5 rounded scale-90 origin-left font-bold">内置</span>' : (sub.url ? '' : '<span class="text-[8px] bg-app-border px-1.5 py-0.5 rounded text-app-muted scale-90 origin-left">本地</span>')}
                     </div>
                     <span class="text-[10px] text-app-muted truncate block max-w-[180px]">${urlDisplay}</span>
                 </div>
@@ -1669,8 +1660,10 @@ async function deleteSubscription(index) {
     
     subscriptionsData.splice(index, 1);
     
-    const newIdx = currentSubIndex >= subscriptionsData.length ? subscriptionsData.length - 1 : currentSubIndex;
-    setCurrentSubIndex(newIdx);
+    if (currentSubIndex >= subscriptionsData.length) {
+        currentSubIndex = subscriptionsData.length - 1;
+    }
+    localStorage.setItem('lepo_current_sub_index', currentSubIndex);
     
     saveSubscriptions();
     renderSubscriptionsList();
@@ -2418,12 +2411,403 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(checkAndExecuteSilentUpdate, 3000);
     setInterval(checkAndExecuteSilentUpdate, 60000);
 
-    initTheme();
-    initDialogs();
-    initDiagnostics();
-    initTabNavigation();
-    initCustomRulesAndDnsForm();
-    initKeyboardShortcuts();
-    switchTab('home');
+    initUtilityDrawers();
     setTimeout(runIpDiagnostic, 1500);
 });
+
+// --- 实用工具二级菜单诊断面板实现 (Utility Secondary Drawers Implementation) ---
+let isIpDiagnosing = false;
+let isUnlockDiagnosing = false;
+let isLogsPaused = false;
+
+// 1. IP 地理出口检测
+async function runIpDiagnostic() {
+    if (isIpDiagnosing) return;
+    isIpDiagnosing = true;
+    
+    const diagCountry = document.getElementById('diagCountry');
+    const diagRegionCity = document.getElementById('diagRegionCity');
+    const diagIp = document.getElementById('diagIp');
+    const diagIsp = document.getElementById('diagIsp');
+    const diagAsn = document.getElementById('diagAsn');
+    const diagCoords = document.getElementById('diagCoords');
+    const diagStatusDot = document.getElementById('diagStatusDot');
+    const diagStatusText = document.getElementById('diagStatusText');
+    const settingsCurrentIpText = document.getElementById('settingsCurrentIpText');
+    const diagFlag = document.getElementById('diagFlag');
+    
+    if (diagCountry) diagCountry.textContent = '正在检测出口中...';
+    if (diagRegionCity) diagRegionCity.textContent = '正在获取物理地理定位...';
+    if (diagIp) diagIp.textContent = '---';
+    if (diagIsp) diagIsp.textContent = '---';
+    if (diagAsn) diagAsn.textContent = '---';
+    if (diagCoords) diagCoords.textContent = '---';
+    
+    try {
+        const res = await fetch('https://ipapi.co/json/');
+        const data = await res.json();
+        
+        if (data.ip) {
+            if (diagIp) diagIp.textContent = data.ip;
+            if (diagCountry) diagCountry.textContent = data.country_name || '未知国家';
+            if (diagRegionCity) diagRegionCity.textContent = `${data.region || ''} ${data.city || ''}`;
+            if (diagIsp) diagIsp.textContent = data.org || '未知运营商';
+            if (diagAsn) diagAsn.textContent = data.asn || '---';
+            if (diagCoords) diagCoords.textContent = `${data.latitude || '0'}, ${data.longitude || '0'}`;
+            
+            const emoji = getFlagEmoji(data.country_code);
+            if (diagFlag) diagFlag.textContent = emoji;
+            
+            if (settingsCurrentIpText) {
+                settingsCurrentIpText.textContent = `${emoji} ${data.ip}`;
+            }
+            
+            // 更新核心连接状态状态
+            if (diagStatusDot && diagStatusText) {
+                if (connectionState === 2) {
+                    diagStatusDot.className = 'w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_currentColor]';
+                    diagStatusText.textContent = '代理已生效';
+                } else {
+                    diagStatusDot.className = 'w-2 h-2 rounded-full bg-sky-500 shadow-[0_0_6px_currentColor]';
+                    diagStatusText.textContent = '直连模式';
+                }
+            }
+        } else {
+            throw new Error('IP 获取解析失败');
+        }
+    } catch (err) {
+        console.error('IP Diagnostic error:', err);
+        if (diagCountry) diagCountry.textContent = '网络定位失败';
+        if (diagRegionCity) diagRegionCity.textContent = '请检查网络连接或节点代理状态';
+        if (settingsCurrentIpText) {
+            settingsCurrentIpText.textContent = '检测失败';
+        }
+    } finally {
+        isIpDiagnosing = false;
+    }
+}
+
+function getFlagEmoji(countryCode) {
+    if (!countryCode) return '🌐';
+    const codePoints = countryCode
+        .toUpperCase()
+        .split('')
+        .map(char => 127397 + char.charCodeAt(0));
+    try {
+        return String.fromCodePoint(...codePoints);
+    } catch (e) {
+        return '🌐';
+    }
+}
+
+// 2. 流媒体与 AI 解锁测试
+async function testUnlockService(url) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 4000); // 4s 超时限制
+    try {
+        await fetch(url, {
+            method: 'GET',
+            mode: 'no-cors',
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return true;
+    } catch (e) {
+        clearTimeout(id);
+        return false;
+    }
+}
+
+async function runUnlockDiagnostic() {
+    if (isUnlockDiagnosing) return;
+    isUnlockDiagnosing = true;
+
+    const btn = document.getElementById('btnRunUnlockDiagnostic');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="ph ph-spinner animate-spin mr-1"></i> 正在并发检测中...';
+    }
+
+    const services = [
+        { id: 'ChatGPT', url: 'https://chatgpt.com' },
+        { id: 'Claude', url: 'https://claude.ai' },
+        { id: 'Netflix', url: 'https://www.netflix.com/title/80018499' },
+        { id: 'YouTube', url: 'https://www.youtube.com/premium' },
+        { id: 'Disney', url: 'https://www.disneyplus.com' },
+        { id: 'Spotify', url: 'https://www.spotify.com' }
+    ];
+    
+    for (const service of services) {
+        const dot = document.getElementById(`dot${service.id}`);
+        const text = document.getElementById(`text${service.id}`);
+        if (dot && text) {
+            dot.className = 'w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse';
+            text.className = 'text-[10px] text-sky-500 font-semibold';
+            text.textContent = '正在检测...';
+        }
+    }
+    
+    // 并发测试
+    await Promise.all(services.map(async (service) => {
+        const dot = document.getElementById(`dot${service.id}`);
+        const text = document.getElementById(`text${service.id}`);
+        if (!dot || !text) return;
+        
+        const isUnlocked = await testUnlockService(service.url);
+        
+        if (isUnlocked) {
+            dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_4px_currentColor]';
+            text.className = 'text-[10px] text-emerald-500 font-semibold';
+            text.textContent = '已解锁正常';
+        } else {
+            dot.className = 'w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_4px_currentColor]';
+            text.className = 'text-[10px] text-rose-500 font-semibold';
+            text.textContent = '未解锁 / 屏蔽';
+        }
+    }));
+
+    if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="ph ph-lightning mr-1"></i> 开始一键解锁检测';
+    }
+    isUnlockDiagnosing = false;
+}
+
+// 3. 监听核心分流日志上报
+if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('core-log', (event) => {
+        if (isLogsPaused) return;
+        const logConsole = document.getElementById('logDiagnosticConsole');
+        if (logConsole) {
+            const div = document.createElement('div');
+            div.className = 'py-1 text-app-text transition-all duration-300';
+            
+            const text = event.payload || '';
+            // 智能过滤着色
+            if (text.includes('WARN')) {
+                div.className = 'py-1 text-sky-500 font-semibold';
+            } else if (text.includes('ERROR') || text.includes('FATAL')) {
+                div.className = 'py-1 text-rose-500 font-bold';
+            } else if (text.includes('reject') || text.includes('REJECT') || text.includes('block')) {
+                div.className = 'py-1 text-app-muted opacity-60';
+            } else if (text.includes('match') || text.includes('DIRECT') || text.includes('rule')) {
+                div.className = 'py-1 text-sky-500';
+            }
+            
+            div.textContent = text;
+            logConsole.appendChild(div);
+            
+            if (logConsole.children.length > 200) {
+                logConsole.removeChild(logConsole.firstChild);
+            }
+            
+            logConsole.scrollTop = logConsole.scrollHeight;
+        }
+    });
+}
+
+// 初始化二级诊断抽屉注册器
+function initUtilityDrawers() {
+    const overlays = {
+        ip: {
+            overlay: document.getElementById('ipDiagnosticOverlay'),
+            card: document.getElementById('ipDiagnosticCard'),
+            openBtn: document.getElementById('btnOpenIpDiagnostic'),
+            closeBtn: document.getElementById('closeIpDiagnosticBtn'),
+            action: runIpDiagnostic
+        },
+        unlock: {
+            overlay: document.getElementById('unlockDiagnosticOverlay'),
+            card: document.getElementById('unlockDiagnosticCard'),
+            openBtn: document.getElementById('btnOpenUnlockDiagnostic'),
+            closeBtn: document.getElementById('closeUnlockDiagnosticBtn'),
+            action: runUnlockDiagnostic
+        },
+        logs: {
+            overlay: document.getElementById('logsDiagnosticOverlay'),
+            card: document.getElementById('logsDiagnosticCard'),
+            openBtn: document.getElementById('btnOpenLogsDiagnostic'),
+            closeBtn: document.getElementById('closeLogsDiagnosticBtn'),
+            action: null
+        }
+    };
+
+    function showDrawer(drawer) {
+        if (!drawer.overlay || !drawer.card) return;
+        drawer.overlay.classList.remove('pointer-events-none', 'opacity-0');
+        drawer.card.classList.remove('scale-95', 'opacity-0');
+        if (drawer.action) {
+            drawer.action();
+        }
+    }
+
+    function hideDrawer(drawer) {
+        if (!drawer.overlay || !drawer.card) return;
+        drawer.overlay.classList.add('pointer-events-none', 'opacity-0');
+        drawer.card.classList.add('scale-95', 'opacity-0');
+    }
+
+    Object.keys(overlays).forEach(key => {
+        const item = overlays[key];
+        if (item.openBtn && item.overlay && item.card) {
+            item.openBtn.addEventListener('click', () => showDrawer(item));
+            if (item.closeBtn) {
+                item.closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    hideDrawer(item);
+                });
+            }
+            item.overlay.addEventListener('click', () => hideDrawer(item));
+        }
+    });
+
+    // 独立控制日志暂停与清空
+    const btnClearLogs = document.getElementById('btnClearLogsDiagnostic');
+    const btnPauseLogs = document.getElementById('btnPauseLogsDiagnostic');
+    const logConsole = document.getElementById('logDiagnosticConsole');
+    const pauseLogsIcon = document.getElementById('pauseLogsIcon');
+    const pauseLogsText = document.getElementById('pauseLogsText');
+
+    if (btnClearLogs && logConsole) {
+        btnClearLogs.addEventListener('click', (e) => {
+            e.stopPropagation();
+            logConsole.innerHTML = '<div class="py-1 text-app-muted">[SYSTEM] 监控终端已清空，继续监听中...</div>';
+        });
+    }
+
+    if (btnPauseLogs && pauseLogsIcon && pauseLogsText) {
+        btnPauseLogs.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isLogsPaused = !isLogsPaused;
+            if (isLogsPaused) {
+                pauseLogsIcon.className = 'ph ph-play mr-1';
+                pauseLogsText.textContent = '继续监控';
+                btnPauseLogs.className = 'flex-1 bg-emerald-500 text-app-base font-semibold py-2 rounded-xl text-xs hover:opacity-90 transition-opacity btn-press';
+            } else {
+                pauseLogsIcon.className = 'ph ph-pause mr-1';
+                pauseLogsText.textContent = '暂停监控';
+                btnPauseLogs.className = 'flex-1 bg-app-text text-app-base font-semibold py-2 rounded-xl text-xs hover:opacity-90 transition-opacity btn-press';
+            }
+        });
+    }
+
+    // 绑定刷新 IP 诊断
+    const btnRefreshIp = document.getElementById('btnRefreshIpDiagnostic');
+    if (btnRefreshIp) {
+        btnRefreshIp.addEventListener('click', (e) => {
+            e.stopPropagation();
+            runIpDiagnostic();
+        });
+    }
+
+    // 绑定一键解锁测试
+    const btnRunUnlock = document.getElementById('btnRunUnlockDiagnostic');
+    if (btnRunUnlock) {
+        btnRunUnlock.addEventListener('click', (e) => {
+            e.stopPropagation();
+            runUnlockDiagnostic();
+        });
+    }
+}
+
+// --- LepoProxy Premium Custom Dialog and Toast Helper Logic ---
+let dialogResolve = null;
+
+function showConfirm(title, message, isAlert = false) {
+    return new Promise((resolve) => {
+        dialogResolve = resolve;
+        const overlay = document.getElementById('customDialogOverlay');
+        const card = document.getElementById('customDialogCard');
+        const titleEl = document.getElementById('customDialogTitle');
+        const msgEl = document.getElementById('customDialogMessage');
+        const cancelBtn = document.getElementById('customDialogCancelBtn');
+        const confirmBtn = document.getElementById('customDialogConfirmBtn');
+        const iconEl = document.getElementById('customDialogIcon');
+        const iconContainer = document.getElementById('customDialogIconContainer');
+
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+
+        if (isAlert) {
+            cancelBtn.classList.add('hidden');
+            confirmBtn.textContent = '我知道了';
+            confirmBtn.className = "px-4 py-1.5 bg-app-text text-app-base hover:opacity-90 text-[10px] font-semibold rounded-lg transition-colors btn-press";
+            iconEl.className = "ph ph-info text-lg";
+            iconContainer.className = "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-app-primary/10 text-app-primary";
+        } else {
+            cancelBtn.classList.remove('hidden');
+            confirmBtn.textContent = '确认';
+            confirmBtn.className = "px-3 py-1.5 bg-red-500 text-white hover:bg-red-600 text-[10px] font-semibold rounded-lg transition-colors btn-press";
+            iconEl.className = "ph ph-warning text-lg";
+            iconContainer.className = "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-rose-500/10 text-rose-500";
+        }
+
+        overlay.classList.remove('opacity-0', 'pointer-events-none');
+        card.classList.remove('scale-95', 'opacity-0');
+        card.classList.add('scale-100', 'opacity-100');
+    });
+}
+
+function closeDialog(result) {
+    const overlay = document.getElementById('customDialogOverlay');
+    const card = document.getElementById('customDialogCard');
+    
+    card.classList.remove('scale-100', 'opacity-100');
+    card.classList.add('scale-95', 'opacity-0');
+    overlay.classList.add('opacity-0', 'pointer-events-none');
+    
+    if (dialogResolve) {
+        dialogResolve(result);
+        dialogResolve = null;
+    }
+}
+
+// Bind dialog buttons
+document.getElementById('customDialogCancelBtn').addEventListener('click', () => closeDialog(false));
+document.getElementById('customDialogConfirmBtn').addEventListener('click', () => closeDialog(true));
+document.getElementById('customDialogOverlay').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('customDialogOverlay')) {
+        const cancelBtn = document.getElementById('customDialogCancelBtn');
+        if (!cancelBtn.classList.contains('hidden')) {
+            closeDialog(false);
+        } else {
+            closeDialog(true);
+        }
+    }
+});
+
+// Premium Toast System
+function showToast(message, type = 'success') {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `flex items-center gap-2 px-3 py-2 bg-app-surface/95 backdrop-blur border border-app-border shadow-xl rounded-xl pointer-events-auto transform translate-y-[-10px] opacity-0 transition-all duration-300 theme-transition w-full`;
+    
+    let iconClass = 'ph-check-circle text-emerald-500';
+    if (type === 'warning') iconClass = 'ph-warning text-sky-500';
+    if (type === 'error') iconClass = 'ph-x-circle text-red-500';
+    if (type === 'info') iconClass = 'ph-info text-app-primary';
+
+    toast.innerHTML = `
+        <i class="ph ${iconClass} text-sm flex-shrink-0"></i>
+        <span class="text-[10px] font-semibold text-app-text whitespace-nowrap overflow-hidden text-ellipsis flex-1">${message}</span>
+    `;
+
+    container.appendChild(toast);
+
+    // Fade in
+    setTimeout(() => {
+        toast.classList.remove('translate-y-[-10px]', 'opacity-0');
+        toast.classList.add('translate-y-0', 'opacity-100');
+    }, 50);
+
+    // Fade out and remove
+    setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-[-10px]', 'opacity-0');
+        setTimeout(() => {
+            toast.remove();
+        }, 300);
+    }, 2500);
+}

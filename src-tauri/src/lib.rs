@@ -86,6 +86,11 @@ fn generate_singbox_config(
     tun_enabled: bool,
     ipv6_enabled: bool,
     lan_enabled: bool,
+    custom_direct_domains: Option<Vec<String>>,
+    custom_proxy_domains: Option<Vec<String>>,
+    custom_block_domains: Option<Vec<String>>,
+    dns_local_server: Option<String>,
+    dns_remote_server: Option<String>,
 ) -> Result<String, String> {
     node_splitting::assemble_config(
         &nodes_json,
@@ -95,6 +100,11 @@ fn generate_singbox_config(
         tun_enabled,
         ipv6_enabled,
         lan_enabled,
+        custom_direct_domains,
+        custom_proxy_domains,
+        custom_block_domains,
+        dns_local_server,
+        dns_remote_server,
     )
 }
 

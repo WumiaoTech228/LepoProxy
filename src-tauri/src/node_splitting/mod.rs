@@ -10,6 +10,18 @@ pub struct SingBoxConfig {
     pub inbounds: Vec<InboundConfig>,
     pub outbounds: Vec<Value>,
     pub route: RouteConfig,
+    pub experimental: ExperimentalConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExperimentalConfig {
+    pub clash_api: ClashApiConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClashApiConfig {
+    pub external_controller: String,
+    pub secret: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,6 +57,8 @@ pub struct DnsRule {
     pub geosite: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outbound: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_suffix: Option<Vec<String>>,
     pub server: String,
 }
 
@@ -106,16 +120,29 @@ pub fn assemble_config(
     tun_enabled: bool,
     ipv6_enabled: bool,
     lan_enabled: bool,
+    custom_direct_domains: Option<Vec<String>>,
+    custom_proxy_domains: Option<Vec<String>>,
+    custom_block_domains: Option<Vec<String>>,
+    dns_local_server: Option<String>,
+    dns_remote_server: Option<String>,
 ) -> Result<String, String> {
     // 1. 将翻译好的节点反序列化为动态 JSON Value 数组
     let mut parsed_nodes: Vec<Value> = serde_json::from_str(nodes_json)
         .map_err(|e| format!("Failed to parse nodes JSON: {}", e))?;
     
-    // 提取所有节点的 tag 用于组装策略组
+    // 提取并清理节点 tags，防止与系统内置的 tag 发生冲突导致 sing-box 启动崩溃
+    let reserved_tags = ["Proxy", "Auto", "direct", "block", "dns-out", "mixed-in", "tun-in"];
     let mut node_tags = Vec::new();
-    for node in &parsed_nodes {
-        if let Some(tag) = node.get("tag").and_then(|v| v.as_str()) {
-            node_tags.push(tag.to_string());
+    for node in &mut parsed_nodes {
+        if let Some(tag_val) = node.get_mut("tag") {
+            if let Some(tag_str) = tag_val.as_str() {
+                let mut clean_tag = tag_str.to_string();
+                if reserved_tags.iter().any(|&r| r.eq_ignore_ascii_case(&clean_tag)) {
+                    clean_tag = format!("{}_node", clean_tag);
+                    *tag_val = serde_json::Value::String(clean_tag.clone());
+                }
+                node_tags.push(clean_tag);
+            }
         }
     }
 
@@ -192,22 +219,65 @@ pub fn assemble_config(
         }
         _ => {
             // 规则分流模式 (Rule Mode)，绕过大陆
-            vec![
+            let mut rules = vec![
                 RouteRule {
                     protocol: Some(vec!["dns".to_string()]),
                     outbound: "dns-out".to_string(),
                     geosite: None,
                     geoip: None,
                     domain_suffix: None,
-                },
-                RouteRule {
-                    geosite: Some(vec!["cn".to_string()]),
-                    geoip: Some(vec!["cn".to_string(), "private".to_string()]),
-                    outbound: "direct".to_string(),
-                    protocol: None,
-                    domain_suffix: None,
-                },
-            ]
+                }
+            ];
+
+            // 注入自定义拦截规则
+            if let Some(ref block_list) = custom_block_domains {
+                if !block_list.is_empty() {
+                    rules.push(RouteRule {
+                        domain_suffix: Some(block_list.clone()),
+                        outbound: "block".to_string(),
+                        protocol: None,
+                        geosite: None,
+                        geoip: None,
+                    });
+                }
+            }
+
+            // 注入自定义代理规则
+            if let Some(ref proxy_list) = custom_proxy_domains {
+                if !proxy_list.is_empty() {
+                    rules.push(RouteRule {
+                        domain_suffix: Some(proxy_list.clone()),
+                        outbound: "Proxy".to_string(),
+                        protocol: None,
+                        geosite: None,
+                        geoip: None,
+                    });
+                }
+            }
+
+            // 注入自定义直连规则
+            if let Some(ref direct_list) = custom_direct_domains {
+                if !direct_list.is_empty() {
+                    rules.push(RouteRule {
+                        domain_suffix: Some(direct_list.clone()),
+                        outbound: "direct".to_string(),
+                        protocol: None,
+                        geosite: None,
+                        geoip: None,
+                    });
+                }
+            }
+
+            // 默认的大陆直连规则
+            rules.push(RouteRule {
+                geosite: Some(vec!["cn".to_string()]),
+                geoip: Some(vec!["cn".to_string(), "private".to_string()]),
+                outbound: "direct".to_string(),
+                protocol: None,
+                domain_suffix: None,
+            });
+
+            rules
         }
     };
 
@@ -234,6 +304,12 @@ pub fn assemble_config(
         "127.0.0.1".to_string()
     };
 
+    let final_dns_server = if mode == "direct" {
+        "dns-local".to_string()
+    } else {
+        "dns-remote".to_string()
+    };
+
     let config = SingBoxConfig {
         log: LogConfig {
             disabled: false,
@@ -244,32 +320,47 @@ pub fn assemble_config(
             servers: vec![
                 DnsServer {
                     tag: "dns-remote".to_string(),
-                    address: "tcp://8.8.8.8".to_string(),
+                    address: dns_remote_server.unwrap_or_else(|| "tcp://8.8.8.8".to_string()),
                     address_resolver: Some("dns-local".to_string()),
                     address_strategy: dns_address_strategy.clone(),
                     detour: "Proxy".to_string(),
                 },
                 DnsServer {
                     tag: "dns-local".to_string(),
-                    address: "223.5.5.5".to_string(),
+                    address: dns_local_server.unwrap_or_else(|| "223.5.5.5".to_string()),
                     address_resolver: None,
                     address_strategy: dns_address_strategy.clone(),
                     detour: "direct".to_string(),
                 },
             ],
-            rules: vec![
-                DnsRule {
-                    outbound: Some(vec!["any".to_string()]),
+            rules: {
+                let mut dns_rules = vec![
+                    DnsRule {
+                        geosite: Some(vec!["cn".to_string()]),
+                        server: "dns-local".to_string(),
+                        outbound: None,
+                        domain_suffix: None,
+                    }
+                ];
+                if let Some(ref direct_list) = custom_direct_domains {
+                    if !direct_list.is_empty() {
+                        dns_rules.push(DnsRule {
+                            domain_suffix: Some(direct_list.clone()),
+                            server: "dns-local".to_string(),
+                            geosite: None,
+                            outbound: None,
+                        });
+                    }
+                }
+                dns_rules.push(DnsRule {
+                    outbound: Some(vec!["direct".to_string()]),
                     server: "dns-local".to_string(),
                     geosite: None,
-                },
-                DnsRule {
-                    geosite: Some(vec!["cn".to_string()]),
-                    server: "dns-local".to_string(),
-                    outbound: None,
-                },
-            ],
-            final_server: "dns-remote".to_string(),
+                    domain_suffix: None,
+                });
+                dns_rules
+            },
+            final_server: final_dns_server,
             strategy: dns_strategy,
         },
         inbounds: {
@@ -313,6 +404,12 @@ pub fn assemble_config(
             final_outbound: Some(final_outbound),
             auto_detect_interface: true,
         },
+        experimental: ExperimentalConfig {
+            clash_api: ClashApiConfig {
+                external_controller: "127.0.0.1:9090".to_string(),
+                secret: String::new(),
+            },
+        },
     };
 
     serde_json::to_string_pretty(&config)
@@ -345,7 +442,7 @@ mod tests {
         ]
         "#;
 
-        let result = assemble_config(dummy_nodes, "rule", "Auto", 7890, true, false, false).unwrap();
+        let result = assemble_config(dummy_nodes, "rule", "Auto", 7890, true, false, false, None, None, None, None, None).unwrap();
         
         let parsed: Value = serde_json::from_str(&result).unwrap();
         

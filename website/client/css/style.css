@@ -164,18 +164,18 @@ html, body {
 
 /* Active node left highlight indicator */
 .active-node-indicator {
-    border-left: 3px solid #f59e0b !important;
+    border-left: 3px solid #38bdf8 !important;
 }
 
 
 /* Pinned (starred) node elegant container style */
 .pinned-node-card {
-    border: 1px solid rgba(245, 158, 11, 0.25) !important;
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.03) 0%, rgba(245, 158, 11, 0) 100%) !important;
+    border: 1px solid rgba(56, 189, 248, 0.25) !important;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.03) 0%, rgba(56, 189, 248, 0) 100%) !important;
 }
 html.dark .pinned-node-card {
-    border: 1px solid rgba(245, 158, 11, 0.2) !important;
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(245, 158, 11, 0) 100%) !important;
+    border: 1px solid rgba(56, 189, 248, 0.2) !important;
+    background: linear-gradient(135deg, rgba(56, 189, 248, 0.05) 0%, rgba(56, 189, 248, 0) 100%) !important;
 }
 
 /* Premium input focus: smooth transition with double focus ring shadow */
@@ -203,45 +203,3 @@ html.dark .node-actions-capsule {
     border: 1px solid rgba(63, 63, 70, 0.6);
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.18); /* shadow-md */
 }
-
-/* ===== Connected-state pulse ring animation ===== */
-@keyframes pulse-ring {
-    0%   { transform: scale(0.85); opacity: 0.5; }
-    70%  { transform: scale(1.2);  opacity: 0;   }
-    100% { transform: scale(1.2);  opacity: 0;   }
-}
-
-@keyframes pulse-ring-slow {
-    0%   { transform: scale(0.9);  opacity: 0.3; }
-    70%  { transform: scale(1.3);  opacity: 0;   }
-    100% { transform: scale(1.3);  opacity: 0;   }
-}
-
-.pulse-ring-active {
-    border: 2px solid var(--app-text);
-    animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-}
-
-.pulse-ring-active-slow {
-    border: 1.5px solid var(--app-text);
-    animation: pulse-ring-slow 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
-    animation-delay: 0.45s;
-}
-
-/* ===== Speed widget number styling ===== */
-#speedUp, #speedDown {
-    min-width: 60px;
-    text-align: right;
-    transition: color 0.4s ease;
-}
-
-/* ===== Core crashed banner ===== */
-#coreCrashedBanner {
-    animation: slide-down 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes slide-down {
-    from { transform: translateY(-100%); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-}
-
