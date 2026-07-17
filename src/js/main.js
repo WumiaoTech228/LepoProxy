@@ -1594,9 +1594,8 @@ async function updateOnlineSubscription(index) {
         let resultStr = "";
         if (sub.url.startsWith('http://') || sub.url.startsWith('https://')) {
             const reliableUrl = getReliableSubUrl(sub.url);
-            console.log(`Fetching from reliable subscription URL: ${reliableUrl}`);
-            const rawContent = await window.__TAURI__.core.invoke('fetch_subscription', { url: reliableUrl });
-            resultStr = await window.__TAURI__.core.invoke('translate_raw_nodes', { content: rawContent });
+            console.log(`Fetching and translating from URL: ${reliableUrl}`);
+            resultStr = await window.__TAURI__.core.invoke('fetch_and_translate_node', { url: reliableUrl });
         } else {
             resultStr = await window.__TAURI__.core.invoke('translate_raw_nodes', { content: sub.url });
         }
@@ -1951,9 +1950,8 @@ async function checkAndExecuteSilentUpdate() {
                 let resultStr = "";
                 if (sub.url.startsWith('http://') || sub.url.startsWith('https://')) {
                     const reliableUrl = getReliableSubUrl(sub.url);
-                    console.log(`Silent fetching from reliable subscription URL: ${reliableUrl}`);
-                    const rawContent = await window.__TAURI__.core.invoke('fetch_subscription', { url: reliableUrl });
-                    resultStr = await window.__TAURI__.core.invoke('translate_raw_nodes', { content: rawContent });
+                    console.log(`Silent fetching and translating from URL: ${reliableUrl}`);
+                    resultStr = await window.__TAURI__.core.invoke('fetch_and_translate_node', { url: reliableUrl });
                 } else {
                     resultStr = await window.__TAURI__.core.invoke('translate_raw_nodes', { content: sub.url });
                 }

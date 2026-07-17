@@ -172,11 +172,17 @@ pub fn assemble_config(
     proxy_out_options.extend(node_tags.clone());
     proxy_out_options.push("direct".to_string());
 
-    let default_outbound = if active_node.is_empty() {
-        "Auto"
+    let mut default_outbound = if active_node.is_empty() {
+        "Auto".to_string()
     } else {
-        active_node
+        active_node.to_string()
     };
+
+    // 防止 active_node 与系统内置的保留 tag 冲突，进行对应的重命名修正
+    let rename_reserved = ["Proxy", "block", "dns-out", "mixed-in", "tun-in"];
+    if rename_reserved.iter().any(|&r| r.eq_ignore_ascii_case(&default_outbound)) {
+        default_outbound = format!("{}_node", default_outbound);
+    }
 
     let proxy_out = serde_json::json!({
         "type": "selector",
@@ -310,6 +316,15 @@ pub fn assemble_config(
         "dns-remote".to_string()
     };
 
+    let dns_remote = match dns_remote_server {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => "tcp://8.8.8.8".to_string(),
+    };
+    let dns_local = match dns_local_server {
+        Some(ref s) if !s.trim().is_empty() => s.clone(),
+        _ => "223.5.5.5".to_string(),
+    };
+
     let config = SingBoxConfig {
         log: LogConfig {
             disabled: false,
@@ -320,14 +335,14 @@ pub fn assemble_config(
             servers: vec![
                 DnsServer {
                     tag: "dns-remote".to_string(),
-                    address: dns_remote_server.unwrap_or_else(|| "tcp://8.8.8.8".to_string()),
+                    address: dns_remote,
                     address_resolver: Some("dns-local".to_string()),
                     address_strategy: dns_address_strategy.clone(),
                     detour: "Proxy".to_string(),
                 },
                 DnsServer {
                     tag: "dns-local".to_string(),
-                    address: dns_local_server.unwrap_or_else(|| "223.5.5.5".to_string()),
+                    address: dns_local,
                     address_resolver: None,
                     address_strategy: dns_address_strategy.clone(),
                     detour: "direct".to_string(),
@@ -467,5 +482,48 @@ mod tests {
         // 验证真实节点是否在尾部被追加
         assert!(outbounds.iter().any(|o| o.get("tag").and_then(|v| v.as_str()) == Some("US-Node-1")));
         assert!(outbounds.iter().any(|o| o.get("tag").and_then(|v| v.as_str()) == Some("HK-Node-2")));
+    }
+
+    #[test]
+    fn test_assemble_config_reserved_tags_and_empty_dns() {
+        let dummy_nodes = r#"
+        [
+            {
+                "type": "vless",
+                "tag": "Proxy",
+                "server": "us.example.com",
+                "server_port": 443,
+                "uuid": "xxx"
+            }
+        ]
+        "#;
+
+        let result = assemble_config(
+            dummy_nodes,
+            "rule",
+            "Proxy",
+            7890,
+            true,
+            false,
+            false,
+            None,
+            None,
+            None,
+            Some("  ".to_string()),
+            Some("".to_string()),
+        ).unwrap();
+
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        let outbounds = parsed.get("outbounds").unwrap().as_array().unwrap();
+        let proxy_group = outbounds.iter().find(|o| o.get("tag").and_then(|v| v.as_str()) == Some("Proxy")).unwrap();
+        assert_eq!(proxy_group.get("default").unwrap().as_str().unwrap(), "Proxy_node");
+
+        let dns = parsed.get("dns").unwrap();
+        let servers = dns.get("servers").unwrap().as_array().unwrap();
+        let remote_dns = servers.iter().find(|s| s.get("tag").and_then(|v| v.as_str()) == Some("dns-remote")).unwrap();
+        let local_dns = servers.iter().find(|s| s.get("tag").and_then(|v| v.as_str()) == Some("dns-local")).unwrap();
+        assert_eq!(remote_dns.get("address").unwrap().as_str().unwrap(), "tcp://8.8.8.8");
+        assert_eq!(local_dns.get("address").unwrap().as_str().unwrap(), "223.5.5.5");
     }
 }
