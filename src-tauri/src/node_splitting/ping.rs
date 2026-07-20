@@ -228,10 +228,13 @@ pub async fn ping_all_nodes(nodes_json: &str) -> Result<String, String> {
 
         let task = tokio::spawn(async move {
             // 1. DNS 预解析与环回地址/局域网私有 IP 拦截
-            let resolve_addr = match tokio::task::spawn_blocking(move || {
-                (server_clone.as_str(), port).to_socket_addrs().ok()
-            }).await {
-                Ok(Some(mut addrs)) => {
+            let resolve_addr = match timeout(
+                Duration::from_millis(2000),
+                tokio::task::spawn_blocking(move || {
+                    (server_clone.as_str(), port).to_socket_addrs().ok()
+                })
+            ).await {
+                Ok(Ok(Some(mut addrs))) => {
                     if let Some(first_addr) = addrs.next() {
                         if is_private_or_loopback(first_addr.ip()) {
                             return (tag_clone, -1); // 局域网/环回地址直接过滤（判定为超时）

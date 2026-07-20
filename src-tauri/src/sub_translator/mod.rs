@@ -612,8 +612,8 @@ pub fn parse_single_uri(uri: &str) -> Result<SingBoxOutbound, String> {
 
                 "socks" => {
                     let mut parts = credentials_raw.splitn(2, ':');
-                    let username = parts.next().filter(|s| !s.is_empty()).map(|s| url_decode(s));
-                    let password = parts.next().filter(|s| !s.is_empty()).map(|s| url_decode(s));
+                    let username = parts.next().filter(|s| !s.is_empty()).map(url_decode);
+                    let password = parts.next().filter(|s| !s.is_empty()).map(url_decode);
                     
                     Ok(SingBoxOutbound::Socks {
                         tag,
@@ -626,8 +626,8 @@ pub fn parse_single_uri(uri: &str) -> Result<SingBoxOutbound, String> {
 
                 "http" => {
                     let mut parts = credentials_raw.splitn(2, ':');
-                    let username = parts.next().filter(|s| !s.is_empty()).map(|s| url_decode(s));
-                    let password = parts.next().filter(|s| !s.is_empty()).map(|s| url_decode(s));
+                    let username = parts.next().filter(|s| !s.is_empty()).map(url_decode);
+                    let password = parts.next().filter(|s| !s.is_empty()).map(url_decode);
                     
                     let tls = if queries.get("security").map(|s| s.as_str()) == Some("tls") {
                         Some(TlsConfig {
@@ -655,7 +655,7 @@ pub fn parse_single_uri(uri: &str) -> Result<SingBoxOutbound, String> {
                 "tuic" => {
                     let mut parts = credentials_raw.splitn(2, ':');
                     let uuid = parts.next().unwrap_or("").to_string();
-                    let password = parts.next().map(|s| url_decode(s));
+                    let password = parts.next().map(url_decode);
                     
                     let tls = Some(TlsConfig {
                         enabled: true,
@@ -743,7 +743,7 @@ pub fn parse_single_uri(uri: &str) -> Result<SingBoxOutbound, String> {
                     let private_key = url_decode(credentials_raw);
                     let public_key = queries.get("public_key")
                         .or_else(|| queries.get("public-key"))
-                        .ok_or_else(|| format!("WireGuard URI is missing 'public_key'"))?.to_string();
+                        .ok_or_else(|| "WireGuard URI is missing 'public_key'".to_owned())?.to_string();
 
                     let local_address_str = queries.get("local_address")
                         .or_else(|| queries.get("local-address"))
@@ -876,8 +876,8 @@ pub fn parse_apple_node(line: &str) -> Option<SingBoxOutbound> {
                     let path = params.get("obfs-path").cloned().unwrap_or_else(|| "/".to_string());
                     let mut headers = HashMap::new();
                     if let Some(host) = params.get("obfs-header") {
-                        if host.starts_with("Host:") {
-                            headers.insert("Host".to_string(), host["Host:".len()..].trim().to_string());
+                        if let Some(stripped) = host.strip_prefix("Host:") {
+                            headers.insert("Host".to_string(), stripped.trim().to_string());
                         }
                     }
                     Some(TransportConfig::Ws {
@@ -1068,30 +1068,59 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
     }
     
     let proxies_arr = proxies_node.as_vec()
-        .ok_or_else(|| "The 'proxies' section in Clash YAML is not a sequence (array)")?;
+        .ok_or("The 'proxies' section in Clash YAML is not a sequence (array)")?;
         
     let mut outbounds = Vec::new();
     
     for (idx, p) in proxies_arr.iter().enumerate() {
-        let name = get_yaml_str(p, "name")
-            .ok_or_else(|| format!("Proxy index {} is missing 'name'", idx))?.to_string();
+        let name = match get_yaml_str(p, "name") {
+            Some(n) => n.to_string(),
+            None => {
+                println!("Skipping proxy at index {}: missing 'name'", idx);
+                continue;
+            }
+        };
             
-        let proto_type = get_yaml_str(p, "type")
-            .ok_or_else(|| format!("Proxy '{}' (index {}) is missing 'type'", name, idx))?.to_ascii_lowercase();
+        let proto_type = match get_yaml_str(p, "type") {
+            Some(t) => t.to_ascii_lowercase(),
+            None => {
+                println!("Skipping proxy '{}' (index {}): missing 'type'", name, idx);
+                continue;
+            }
+        };
             
-        let server = get_yaml_str(p, "server")
-            .ok_or_else(|| format!("Proxy '{}' is missing 'server'", name))?.to_string();
+        let server = match get_yaml_str(p, "server") {
+            Some(s) => s.to_string(),
+            None => {
+                println!("Skipping proxy '{}': missing 'server'", name);
+                continue;
+            }
+        };
             
-        let port = get_yaml_port(p)
-            .ok_or_else(|| format!("Proxy '{}' has missing or invalid 'port'", name))?;
+        let port = match get_yaml_port(p) {
+            Some(prt) => prt,
+            None => {
+                println!("Skipping proxy '{}': missing or invalid 'port'", name);
+                continue;
+            }
+        };
             
         match proto_type.as_str() {
             "ss" => {
-                let cipher = get_yaml_str(p, "cipher")
-                    .ok_or_else(|| format!("Shadowsocks proxy '{}' is missing 'cipher'", name))?.to_string();
-                let password = get_yaml_str(p, "password")
-                    .ok_or_else(|| format!("Shadowsocks proxy '{}' is missing 'password'", name))?.to_string();
-                    
+                let cipher = match get_yaml_str(p, "cipher") {
+                    Some(c) => c.to_string(),
+                    None => {
+                        println!("Skipping Shadowsocks proxy '{}': missing 'cipher'", name);
+                        continue;
+                    }
+                };
+                let password = match get_yaml_str(p, "password") {
+                    Some(pwd) => pwd.to_string(),
+                    None => {
+                        println!("Skipping Shadowsocks proxy '{}': missing 'password'", name);
+                        continue;
+                    }
+                };
                 outbounds.push(SingBoxOutbound::Shadowsocks {
                     tag: name,
                     server,
@@ -1102,8 +1131,13 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "vless" => {
-                let uuid = get_yaml_str(p, "uuid")
-                    .ok_or_else(|| format!("VLESS proxy '{}' is missing 'uuid'", name))?.to_string();
+                let uuid = match get_yaml_str(p, "uuid") {
+                    Some(u) => u.to_string(),
+                    None => {
+                        println!("Skipping VLESS proxy '{}': missing 'uuid'", name);
+                        continue;
+                    }
+                };
                 
                 let flow = get_yaml_str(p, "flow").map(|s| s.to_string());
                 
@@ -1170,8 +1204,13 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "vmess" => {
-                let uuid = get_yaml_str(p, "uuid")
-                    .ok_or_else(|| format!("VMess proxy '{}' is missing 'uuid'", name))?.to_string();
+                let uuid = match get_yaml_str(p, "uuid") {
+                    Some(u) => u.to_string(),
+                    None => {
+                        println!("Skipping VMess proxy '{}': missing 'uuid'", name);
+                        continue;
+                    }
+                };
                 let security = Some(get_yaml_str(p, "cipher").unwrap_or("auto").to_string());
                 let alter_id = Some(p["alterId"].as_i64().unwrap_or(0) as u32);
                 
@@ -1219,8 +1258,13 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "trojan" => {
-                let password = get_yaml_str(p, "password")
-                    .ok_or_else(|| format!("Trojan proxy '{}' is missing 'password'", name))?.to_string();
+                let password = match get_yaml_str(p, "password") {
+                    Some(pwd) => pwd.to_string(),
+                    None => {
+                        println!("Skipping Trojan proxy '{}': missing 'password'", name);
+                        continue;
+                    }
+                };
                 
                 let tls = Some(TlsConfig {
                     enabled: true,
@@ -1275,8 +1319,13 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "anytls" => {
-                let password = get_yaml_str(p, "password")
-                    .ok_or_else(|| format!("AnyTLS proxy '{}' is missing 'password'", name))?.to_string();
+                let password = match get_yaml_str(p, "password") {
+                    Some(pwd) => pwd.to_string(),
+                    None => {
+                        println!("Skipping AnyTLS proxy '{}': missing 'password'", name);
+                        continue;
+                    }
+                };
                 
                 let tls = Some(TlsConfig {
                     enabled: true,
@@ -1293,7 +1342,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                 let idle_session_check_interval = get_yaml_str(p, "idle-session-check-interval").map(|s| s.to_string());
                 let idle_session_timeout = get_yaml_str(p, "idle-session-timeout").map(|s| s.to_string());
                 let min_idle_session = p["min-idle-sessions"].as_i64().map(|n| n as u32);
-
+                
                 outbounds.push(SingBoxOutbound::Anytls {
                     tag: name,
                     server,
@@ -1335,7 +1384,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                 } else {
                     None
                 };
-
+                
                 outbounds.push(SingBoxOutbound::Http {
                     tag: name,
                     server,
@@ -1347,8 +1396,13 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "tuic" => {
-                let uuid = get_yaml_str(p, "uuid")
-                    .ok_or_else(|| format!("TUIC proxy '{}' is missing 'uuid'", name))?.to_string();
+                let uuid = match get_yaml_str(p, "uuid") {
+                    Some(u) => u.to_string(),
+                    None => {
+                        println!("Skipping TUIC proxy '{}': missing 'uuid'", name);
+                        continue;
+                    }
+                };
                 let password = get_yaml_str(p, "password").map(|s| s.to_string());
                 
                 let tls = Some(TlsConfig {
@@ -1359,7 +1413,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                     utls: None,
                     reality: None,
                 });
-
+                
                 outbounds.push(SingBoxOutbound::Tuic {
                     tag: name,
                     server,
@@ -1374,10 +1428,20 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "naive" => {
-                let username = get_yaml_str(p, "username")
-                    .ok_or_else(|| format!("Naive proxy '{}' is missing 'username'", name))?.to_string();
-                let password = get_yaml_str(p, "password")
-                    .ok_or_else(|| format!("Naive proxy '{}' is missing 'password'", name))?.to_string();
+                let username = match get_yaml_str(p, "username") {
+                    Some(u) => u.to_string(),
+                    None => {
+                        println!("Skipping Naive proxy '{}': missing 'username'", name);
+                        continue;
+                    }
+                };
+                let password = match get_yaml_str(p, "password") {
+                    Some(pwd) => pwd.to_string(),
+                    None => {
+                        println!("Skipping Naive proxy '{}': missing 'password'", name);
+                        continue;
+                    }
+                };
                 
                 let tls = Some(TlsConfig {
                     enabled: true,
@@ -1390,7 +1454,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                     utls: None,
                     reality: None,
                 });
-
+                
                 outbounds.push(SingBoxOutbound::Naive {
                     tag: name,
                     server,
@@ -1415,7 +1479,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                 } else {
                     None
                 };
-
+                
                 let tls = Some(TlsConfig {
                     enabled: true,
                     server_name: get_yaml_str(p, "sni").or_else(|| get_yaml_str(p, "servername")).map(|s| s.to_string()),
@@ -1424,10 +1488,10 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                     utls: None,
                     reality: None,
                 });
-
+                
                 let up_mbps = p["up"].as_i64().map(|n| n as u32);
                 let down_mbps = p["down"].as_i64().map(|n| n as u32);
-
+                
                 outbounds.push(SingBoxOutbound::Hysteria {
                     tag: name,
                     server,
@@ -1453,19 +1517,27 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                 } else {
                     vec![format!("{}/32", local_address_str)]
                 };
-
-                let private_key = get_yaml_str(p, "private-key")
-                    .or_else(|| get_yaml_str(p, "private_key"))
-                    .ok_or_else(|| format!("WireGuard proxy '{}' is missing 'private-key'", name))?.to_string();
-
-                let public_key = get_yaml_str(p, "public-key")
-                    .or_else(|| get_yaml_str(p, "public_key"))
-                    .ok_or_else(|| format!("WireGuard proxy '{}' is missing 'public-key'", name))?.to_string();
-
+                
+                let private_key = match get_yaml_str(p, "private-key").or_else(|| get_yaml_str(p, "private_key")) {
+                    Some(pk) => pk.to_string(),
+                    None => {
+                        println!("Skipping WireGuard proxy '{}': missing 'private-key'", name);
+                        continue;
+                    }
+                };
+                
+                let public_key = match get_yaml_str(p, "public-key").or_else(|| get_yaml_str(p, "public_key")) {
+                    Some(pubk) => pubk.to_string(),
+                    None => {
+                        println!("Skipping WireGuard proxy '{}': missing 'public-key'", name);
+                        continue;
+                    }
+                };
+                
                 let pre_shared_key = get_yaml_str(p, "preshared-key")
                     .or_else(|| get_yaml_str(p, "preshared_key"))
                     .map(|s| s.to_string());
-
+                
                 let peer = WireguardPeer {
                     server: server.clone(),
                     server_port: port,
@@ -1473,7 +1545,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                     pre_shared_key,
                     allowed_ips: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
                 };
-
+                
                 outbounds.push(SingBoxOutbound::Wireguard {
                     tag: name,
                     local_address,
@@ -1484,11 +1556,16 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
             }
             
             "shadowtls" => {
-                let password = get_yaml_str(p, "password")
-                    .ok_or_else(|| format!("ShadowTLS proxy '{}' is missing 'password'", name))?.to_string();
+                let password = match get_yaml_str(p, "password") {
+                    Some(pwd) => pwd.to_string(),
+                    None => {
+                        println!("Skipping ShadowTLS proxy '{}': missing 'password'", name);
+                        continue;
+                    }
+                };
                 
                 let version = p["version"].as_i64().unwrap_or(3) as u32;
-
+                
                 let tls = TlsConfig {
                     enabled: true,
                     server_name: get_yaml_str(p, "sni")
@@ -1500,7 +1577,7 @@ pub fn translate_clash_yaml(yaml_content: &str) -> Result<String, String> {
                     utls: None,
                     reality: None,
                 };
-
+                
                 outbounds.push(SingBoxOutbound::Shadowtls {
                     tag: name,
                     server,
@@ -1840,12 +1917,24 @@ proxies:
     port: 9000
     protocol: auth_aes128_md5
     obfs: tls1.2_ticket_auth
+  - name: "受损的SS节点(缺密码)"
+    type: ss
+    server: 1.1.1.1
+    port: 8388
+    cipher: aes-256-gcm
+  - name: "受损的VLESS节点(缺UUID)"
+    type: vless
+    server: 2.2.2.2
+    port: 443
+  - name: "受损的Socks节点(缺地址)"
+    type: socks
+    port: 1080
 "#;
 
         let json_result = translate_clash_yaml(clash_yaml).unwrap();
         let parsed_outbounds: Vec<SingBoxOutbound> = serde_json::from_str(&json_result).unwrap();
 
-        // 应该只有 10 个节点被转译成功，旧的 SSR 应该被安全且静默地忽略过滤掉！
+        // 应该只有 10 个节点被转译成功，损坏的节点和旧的 SSR 应该被安全且静默地忽略过滤掉！
         assert_eq!(parsed_outbounds.len(), 10);
 
         // 校验第一个 Shadowsocks 节点

@@ -112,6 +112,7 @@ pub struct RouteRule {
 }
 
 /// 组装完整的 Sing-Box 配置文件，支持三种模式：rule (规则), global (全局), direct (直连)
+#[allow(clippy::too_many_arguments)]
 pub fn assemble_config(
     nodes_json: &str,
     mode: &str,

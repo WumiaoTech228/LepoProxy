@@ -159,6 +159,14 @@ function stopConnectionTimer() {
     }
 }
 
+function updateTrayTooltip(tooltip) {
+    if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke('update_tray_tooltip', { tooltip }).catch(err => {
+            console.error('Failed to update tray tooltip:', err);
+        });
+    }
+}
+
 let coreLogUnlisten = null;
 let coreCrashedUnlisten = null;
 
@@ -207,6 +215,7 @@ function updateUIState() {
         // 未连接：空心状态
         stopConnectionTimer();
         stopSpeedMonitor();
+        updateTrayTooltip("LepoProxy - 已断开");
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -229,6 +238,7 @@ function updateUIState() {
     } else if (connectionState === 1) {
         // 连接中：展示克制的自旋动画
         stopConnectionTimer();
+        updateTrayTooltip("LepoProxy - 正在连接...");
         mainBtn.classList.remove('border-transparent', 'border-app-text');
         btnFill.style.transform = 'translateY(101%)';
 
@@ -248,6 +258,8 @@ function updateUIState() {
     } else if (connectionState === 2) {
         // 已连接：展示高亮对勾，并激活墨水填充
         startConnectionTimer();
+        const activeNode = currentNodeIndex === 0 ? "Auto" : (realNodes[currentNodeIndex] ? realNodes[currentNodeIndex].name : "Auto");
+        updateTrayTooltip(`LepoProxy - 运行中 (节点: ${activeNode})`);
         mainBtn.classList.remove('border-transparent');
         mainBtn.classList.add('border-app-text'); // 边框变为高亮黑/白
         btnFill.style.transform = 'translateY(0)'; // 墨水向上填满
@@ -293,6 +305,7 @@ let isPingTesting = false;
 
 let sortState = 'default'; // 'default', 'latency', 'alphabet'
 let searchQuery = '';
+let protocolFilter = 'all'; // 'all', 'ss', 'vmess', 'vless', 'trojan', 'other'
 
 async function renderNodeList() {
     const container = document.getElementById('nodeListItems');
@@ -307,10 +320,28 @@ async function renderNodeList() {
     // The rest of the nodes are index 1 to length-1
     const nodeItems = realNodes.slice(1);
 
-    // Apply filtering
+    // Apply filtering (search and protocol)
     let filteredItems = nodeItems.filter(node => {
-        if (!searchQuery) return true;
-        return node.name.toLowerCase().includes(searchQuery.toLowerCase());
+        // 1. Search Query filter
+        if (searchQuery && !node.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+            return false;
+        }
+        // 2. Protocol filter
+        if (protocolFilter !== 'all') {
+            const nodeType = (node.type || '').toLowerCase();
+            if (protocolFilter === 'other') {
+                const standardTypes = ['shadowsocks', 'ss', 'vmess', 'vless', 'trojan'];
+                if (standardTypes.includes(nodeType)) {
+                    return false;
+                }
+            } else {
+                const filterMatch = protocolFilter === 'ss' ? 'shadowsocks' : protocolFilter;
+                if (nodeType !== protocolFilter && nodeType !== filterMatch) {
+                    return false;
+                }
+            }
+        }
+        return true;
     });
 
     // Apply sorting
@@ -530,6 +561,10 @@ function updateNodeText(direction) {
     }, 150);
     
     syncTrayNodes();
+    if (connectionState === 2) {
+        const activeNode = currentNodeIndex === 0 ? "Auto" : (realNodes[currentNodeIndex] ? realNodes[currentNodeIndex].name : "Auto");
+        updateTrayTooltip(`LepoProxy - 运行中 (节点: ${activeNode})`);
+    }
     updateSingboxConfig().then(() => {
         hotReloadProxyIfConnected();
     });
@@ -876,8 +911,8 @@ document.addEventListener('contextmenu', (e) => {
     e.preventDefault();
 }, { capture: true });
 
-// 彻底禁用开发者工具快捷键 (F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+R 刷新)
-document.addEventListener('keydown', (e) => {
+// 彻底禁用开发者工具快捷键 (F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+R 刷新) + 新增全局交互热键
+document.addEventListener('keydown', async (e) => {
     if (
         e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
@@ -885,6 +920,40 @@ document.addEventListener('keydown', (e) => {
         e.key === 'F5'
     ) {
         e.preventDefault();
+        return;
+    }
+
+    // 交互热键
+    const activeEl = document.activeElement;
+    const isInputActive = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
+
+    // 1. Ctrl + F 聚焦搜索
+    if (e.ctrlKey && e.key === 'f') {
+        e.preventDefault();
+        switchTab('nodes');
+        const searchInput = document.getElementById('nodeSearchInput');
+        if (searchInput) {
+            searchInput.focus();
+            searchInput.select();
+        }
+    }
+    // 2. Esc 退出输入或隐藏窗口
+    else if (e.key === 'Escape') {
+        if (isInputActive) {
+            activeEl.blur();
+        } else if (window.__TAURI__ && window.__TAURI__.core) {
+            try {
+                await window.__TAURI__.core.invoke('hide_window');
+            } catch (err) {
+                console.error('Esc hide window failed:', err);
+            }
+        }
+    }
+    // 3. Space 切换连接状态 (仅当非输入框聚焦时)
+    else if (e.key === ' ' && !isInputActive) {
+        e.preventDefault();
+        const mainBtn = document.getElementById('mainBtn');
+        if (mainBtn) mainBtn.click();
     }
 }, { capture: true });
 
@@ -2141,6 +2210,26 @@ document.addEventListener('DOMContentLoaded', () => {
             renderNodeList();
         });
     }
+
+    // 协议分类过滤按钮监听
+    const filterButtons = document.querySelectorAll('.proto-filter-btn');
+    filterButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const proto = btn.getAttribute('data-proto');
+            protocolFilter = proto;
+
+            filterButtons.forEach(b => {
+                if (b === btn) {
+                    b.className = "proto-filter-btn px-1.5 py-0.5 rounded bg-app-text text-app-base font-bold transition-all duration-200 whitespace-nowrap btn-press";
+                } else {
+                    b.className = "proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press";
+                }
+            });
+
+            renderNodeList();
+        });
+    });
 
     const sortNodesBtn = document.getElementById('sortNodesBtn');
     if (sortNodesBtn) {

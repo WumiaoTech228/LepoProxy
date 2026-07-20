@@ -78,6 +78,7 @@ async fn fetch_subscription(url: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn generate_singbox_config(
     nodes_json: String,
     mode: String,
@@ -153,7 +154,7 @@ fn set_autostart_enabled(enabled: bool, is_minimized: bool) -> Result<(), String
         };
 
         let mut cmd = std::process::Command::new("reg");
-        cmd.args(&[
+        cmd.args([
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "/v",
@@ -176,7 +177,7 @@ fn set_autostart_enabled(enabled: bool, is_minimized: bool) -> Result<(), String
         }
     } else {
         let mut cmd = std::process::Command::new("reg");
-        cmd.args(&[
+        cmd.args([
             "delete",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
             "/v",
@@ -206,6 +207,15 @@ fn close_app(app: tauri::AppHandle) {
 fn hide_window(window: tauri::WebviewWindow) {
     println!("Backend hide_window command received. Hiding main webview window to system tray...");
     let _ = window.hide();
+}
+
+#[tauri::command]
+fn update_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("default") {
+        tray.set_tooltip(Some(tooltip))
+            .map_err(|e| format!("Failed to set tray tooltip: {}", e))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -321,6 +331,7 @@ pub fn run() {
         run_latency_test,
         close_app,
         hide_window,
+        update_tray_tooltip,
         set_tray_checked,
         update_tray_nodes,
         update_tray_subs,
@@ -439,13 +450,11 @@ pub fn run() {
                         app.exit(0);
                     }
                     other => {
-                        if other.starts_with("node_select_") {
-                            let idx_str = &other["node_select_".len()..];
+                        if let Some(idx_str) = other.strip_prefix("node_select_") {
                             if let Ok(idx) = idx_str.parse::<usize>() {
                                 let _ = app.emit("tray-node-select", idx);
                             }
-                        } else if other.starts_with("sub_select_") {
-                            let idx_str = &other["sub_select_".len()..];
+                        } else if let Some(idx_str) = other.strip_prefix("sub_select_") {
                             if let Ok(idx) = idx_str.parse::<usize>() {
                                 let _ = app.emit("tray-sub-select", idx);
                             }

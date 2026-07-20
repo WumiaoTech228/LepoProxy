@@ -55,8 +55,9 @@ pub fn fetch_via_system_curl(url: &str, ua: &str) -> Result<(String, Option<SubU
     };
 
     let mut cmd_builder = Command::new(cmd);
-    cmd_builder.args(&[
+    cmd_builder.args([
         "-isL", // 输出 Header + 追踪 301/302 重定向 + 静默模式
+        "-m", "15", // 15秒传输超时限制
         "-A", ua,
         url
     ]);

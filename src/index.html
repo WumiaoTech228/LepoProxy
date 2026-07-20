@@ -111,6 +111,11 @@
                         </div>
                     </div>
 
+                    <!-- 实时网速折线图 Canvas -->
+                    <div class="w-full max-w-[220px] h-8 mt-1 pointer-events-none relative overflow-hidden flex items-center justify-center">
+                        <canvas id="speedCanvas" class="w-full h-full opacity-60"></canvas>
+                    </div>
+
                     <!-- 快速节点选择器 -->
                     <div class="relative w-full max-w-[220px] mt-1.5 group pointer-events-auto" title="滑动切换节点，或点击切入节点面板">
                         <div id="nodeSwiperContainer"
@@ -184,6 +189,17 @@
                     <select id="nodeListSubSelect" class="flex-1 bg-app-surface border border-app-border rounded-lg text-[10px] px-1.5 py-0.5 text-app-text outline-none cursor-pointer font-medium">
                     </select>
                 </div>
+
+                <!-- 协议过滤标签 -->
+                <div id="protoFilterBar" class="py-1.5 border-b border-app-border flex items-center justify-between text-[9px] gap-1 overflow-x-auto no-scrollbar">
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-text text-app-base font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="all">全部</button>
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="ss">SS</button>
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="vmess">VMess</button>
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="vless">VLESS</button>
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="trojan">Trojan</button>
+                    <button class="proto-filter-btn px-1.5 py-0.5 rounded bg-app-base text-app-muted hover:text-app-text border border-app-border font-bold transition-all duration-200 whitespace-nowrap btn-press" data-proto="other">其他</button>
+                </div>
+
                 <!-- 搜索与排序 -->
                 <div class="py-1.5 border-b border-app-border flex gap-1.5 items-center">
                     <div class="relative flex-1 flex items-center">

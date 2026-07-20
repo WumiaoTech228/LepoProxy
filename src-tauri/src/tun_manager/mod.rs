@@ -23,12 +23,8 @@ fn flush_dns_cache() {
     println!("Windows DNS cache flushed.");
 }
 
-fn download_wintun_dll(target_path: &std::path::Path) -> Result<(), String> {
-    println!("Starting wintun.dll download from secure CDN...");
-    let urls = vec![
-        "https://fastly.jsdelivr.net/gh/MatsuriDayo/wintun@master/bin/amd64/wintun.dll",
-        "https://raw.githubusercontent.com/MatsuriDayo/wintun/master/bin/amd64/wintun.dll",
-    ];
+fn download_file(name: &str, target_path: &std::path::Path, urls: &[&str], timeout_secs: u64) -> Result<(), String> {
+    println!("Starting {} download from secure CDN...", name);
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -37,7 +33,7 @@ fn download_wintun_dll(target_path: &std::path::Path) -> Result<(), String> {
 
     let download_success = rt.block_on(async {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .build();
             
         let client = match client {
@@ -46,12 +42,12 @@ fn download_wintun_dll(target_path: &std::path::Path) -> Result<(), String> {
         };
 
         for url in urls {
-            println!("Trying async download of Wintun driver from: {}", url);
-            if let Ok(resp) = client.get(url).send().await {
+            println!("Trying async download of {} from: {}", name, url);
+            if let Ok(resp) = client.get(*url).send().await {
                 if resp.status().is_success() {
                     if let Ok(bytes) = resp.bytes().await {
                         if fs::write(target_path, bytes).is_ok() {
-                            println!("wintun.dll successfully downloaded and verified!");
+                            println!("{} successfully downloaded and verified!", name);
                             return true;
                         }
                     }
@@ -64,8 +60,16 @@ fn download_wintun_dll(target_path: &std::path::Path) -> Result<(), String> {
     if download_success {
         Ok(())
     } else {
-        Err("下载/自动安装 虚拟网卡驱动 (wintun.dll) 失败。\n由于国内网络环境原因，请检查您的网络连接并重试，或者手动下载 wintun.dll 并放置在软件的 core/ 文件夹下。".into())
+        Err(format!("下载/自动安装 {} 失败。\n由于网络环境原因，请检查您的网络连接并重试，或者手动下载 {} 并放置在软件的 core/ 文件夹下。", name, name))
     }
+}
+
+fn download_wintun_dll(target_path: &std::path::Path) -> Result<(), String> {
+    let urls = [
+        "https://fastly.jsdelivr.net/gh/MatsuriDayo/wintun@master/bin/amd64/wintun.dll",
+        "https://raw.githubusercontent.com/MatsuriDayo/wintun/master/bin/amd64/wintun.dll",
+    ];
+    download_file("wintun.dll", target_path, &urls, 30)
 }
 
 // 静态存储全局唯一的 Sing-Box 核心子进程句柄
@@ -107,14 +111,14 @@ pub fn refresh_system_proxy_settings() {
 pub fn enable_system_proxy(local_port: u16) -> Result<(), String> {
     // 写入注册表，激活代理设置
     let output1 = Command::new("reg")
-        .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
+        .args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyEnable: {}", e))?;
         
     let proxy_address = format!("127.0.0.1:{}", local_port);
     let output2 = Command::new("reg")
-        .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", &proxy_address, "/f"])
+        .args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer", "/t", "REG_SZ", "/d", &proxy_address, "/f"])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyServer: {}", e))?;
@@ -133,7 +137,7 @@ pub fn enable_system_proxy(local_port: u16) -> Result<(), String> {
 /// 禁用 Windows 系统全局代理并恢复网络畅通
 pub fn disable_system_proxy() -> Result<(), String> {
     let output = Command::new("reg")
-        .args(&["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
+        .args(["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
         .creation_flags(0x08000000)
         .output()
         .map_err(|e| format!("Failed to execute reg for ProxyDisable: {}", e))?;
@@ -161,7 +165,7 @@ pub fn start_singbox(config_json: &str, app: tauri::AppHandle, tun_enabled: bool
             if workspace_core.join("sing-box.exe").exists() {
                 println!("Auto-healing: Found core files in workspace directory: {}. Copying to target build directory...", workspace_core.display());
                 let _ = fs::create_dir_all(&core_dir);
-                let files_to_copy = vec!["sing-box.exe", "wintun.dll", "libcronet.dll"];
+                let files_to_copy = vec!["sing-box.exe", "wintun.dll", "libcronet.dll", "geoip.db", "geosite.db"];
                 for file_name in files_to_copy {
                     let src = workspace_core.join(file_name);
                     let dest = core_dir.join(file_name);
@@ -183,6 +187,27 @@ pub fn start_singbox(config_json: &str, app: tauri::AppHandle, tun_enabled: bool
         if !wintun_path.exists() {
             download_wintun_dll(&wintun_path)?;
         }
+    }
+
+    // 0.5 自动补全 geoip.db 和 geosite.db，防范 Rules 模式下内核启动崩溃
+    let geoip_path = core_dir.join("geoip.db");
+    if !geoip_path.exists() {
+        let geoip_urls = [
+            "https://fastly.jsdelivr.net/gh/SagerNet/sing-geoip@db-ip/geoip.db",
+            "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db",
+            "https://raw.githubusercontent.com/SagerNet/sing-geoip/db-ip/geoip.db",
+        ];
+        download_file("geoip.db", &geoip_path, &geoip_urls, 60)?;
+    }
+
+    let geosite_path = core_dir.join("geosite.db");
+    if !geosite_path.exists() {
+        let geosite_urls = [
+            "https://fastly.jsdelivr.net/gh/SagerNet/sing-geosite@db/geosite.db",
+            "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db",
+            "https://raw.githubusercontent.com/SagerNet/sing-geosite/db/geosite.db",
+        ];
+        download_file("geosite.db", &geosite_path, &geosite_urls, 90)?;
     }
 
     let mut lock = get_process_mutex().lock().unwrap();
@@ -208,7 +233,7 @@ pub fn start_singbox(config_json: &str, app: tauri::AppHandle, tun_enabled: bool
     // 4. 拉起进程
     println!("Spawning new Sing-Box kernel instance...");
     let mut child = Command::new(&singbox_exe_path)
-        .args(&["run", "-c", "config.json"])
+        .args(["run", "-c", "config.json"])
         .current_dir(&core_dir)
         .env("ENABLE_DEPRECATED_LEGACY_DNS_SERVERS", "true")
         .stdout(std::process::Stdio::piped())
@@ -311,4 +336,28 @@ pub fn stop_singbox() -> Result<(), String> {
     flush_dns_cache();
     println!("Sing-Box service stopped.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn test_download_geo_databases() {
+        let temp_dir = std::env::temp_dir().join("lepoproxy_test_geo");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let geoip_path = temp_dir.join("geoip.db");
+        let geoip_urls = [
+            "https://fastly.jsdelivr.net/gh/SagerNet/sing-geoip@db-ip/geoip.db",
+            "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db",
+        ];
+        let res_geoip = download_file("geoip.db", &geoip_path, &geoip_urls, 30);
+        assert!(res_geoip.is_ok());
+        assert!(geoip_path.exists());
+        assert!(std::fs::metadata(&geoip_path).unwrap().len() > 1000);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

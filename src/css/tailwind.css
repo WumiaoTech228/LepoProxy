@@ -815,6 +815,9 @@
   .overflow-hidden {
     overflow: hidden;
   }
+  .overflow-x-auto {
+    overflow-x: auto;
+  }
   .overflow-y-auto {
     overflow-y: auto;
   }
@@ -1926,6 +1929,17 @@ html.dark .node-actions-capsule {
     transform: translateY(0);
     opacity: 1;
   }
+}
+.proto-filter-btn {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--app-border);
+  border-radius: 99px;
 }
 @property --tw-translate-x {
   syntax: "*";
