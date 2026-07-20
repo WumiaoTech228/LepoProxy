@@ -21,8 +21,10 @@ target/
 *.log
 logs/
 
-# Temporary test dumps
-test/online_translated.json
+# Untracked documentation, web assets and test directories
+md/
+website/
+test/
 temp_repos/
 
 # Binaries and installers
